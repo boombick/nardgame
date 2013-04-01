@@ -181,7 +181,7 @@ output = CLIOutput.Instance();
 game   = GameProceed();
 
 
-def get_random_points():
+def get_start_points():
     output.show_and_save("Who goes first?\n")
     for x in range(0, 3):
         output.clear_screen()
@@ -202,11 +202,11 @@ def get_random_points():
         output.show_message("Bang!! Dead heat! Try one else time")
         CLIInput.Instance.get_user_input('Hit [ENTER] when ready\n')
         output.clear_buffer()
-        get_random_points()
+        get_start_points()
 
 
 def main():
-    get_random_points()
+    get_start_points()
     CLIInput.Instance.get_user_input('Press [ENTER] to continue...\n')
 
     # first round check
