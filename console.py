@@ -3,7 +3,7 @@ import time
 import sys
 import os
 from patterns import Singleton
-
+from fysom import Fysom
 
 @Singleton
 class CLIOutput(object):
@@ -26,14 +26,14 @@ class CLIOutput(object):
         self.put_2_buffer(str)
 
     def show_message(self, str):
-        sys.stdout.write(str)
+        sys.stdout.write(str + "\n")
         sys.stdout.flush()
 
 @Singleton
 class CLIInput(object):
 
-    def get_user_input(msg):
-        CLIOutput.Instance.show_message(msg)
+    def get_user_input(self, msg):
+        output.show_message(msg)
         return raw_input("\n")
 
 # ==========================================================
@@ -42,8 +42,8 @@ class GameMapControl(object):
     GAME = None
 
     # Pieces symbols
-    BLACK_PIECE = '#'
-    WHITE_PIECE = '@'
+    BLACK_PIECE_SYMBOL = '#'
+    WHITE_PIECE+SYMBOL = '@'
 
     def __init__(self, game_instance):
         self.GAME = game_instance
@@ -178,12 +178,13 @@ class GameProceed(object):
 
 
 output = CLIOutput.Instance();
+input  = CLIInput.Instance()
 game   = GameProceed();
 
 
 def get_start_points():
     output.show_and_save("Who goes first?\n")
-    for x in range(0, 3):
+    for x in range(0, 6):
         output.clear_screen()
         output.show_buffer()
         b_bone, w_bone = game.roll_the_dice()
@@ -200,14 +201,14 @@ def get_start_points():
         game.begin_round(game.BLACK)
     else:
         output.show_message("Bang!! Dead heat! Try one else time")
-        CLIInput.Instance.get_user_input('Hit [ENTER] when ready\n')
+        input.get_user_input('Hit [ENTER] when ready\n')
         output.clear_buffer()
         get_start_points()
 
 
 def main():
     get_start_points()
-    CLIInput.Instance.get_user_input('Press [ENTER] to continue...\n')
+    input.get_user_input('Press [ENTER] to continue...\n')
 
     # first round check
 
