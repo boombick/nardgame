@@ -43,7 +43,7 @@ class GameMapControl(object):
 
     # Pieces symbols
     BLACK_PIECE_SYMBOL = '#'
-    WHITE_PIECE+SYMBOL = '@'
+    WHITE_PIECE_SYMBOL = '@'
 
     def __init__(self, game_instance):
         self.GAME = game_instance
