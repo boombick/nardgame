@@ -1,6 +1,6 @@
-lng_bckgm
+Nard game
 =========
-Long backgammon
+Nard game or Long backgammon
 
 Python implementation one of classic Backgammon game - The Long Backgammon (only console version)
 
