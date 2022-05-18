@@ -5,6 +5,8 @@ from fastapi.templating import Jinja2Templates
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
+# FastAPI test
+
 @app.get("/")
 async def root():
         return {"Message": "medium"}
