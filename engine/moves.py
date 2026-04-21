@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import List, Tuple
 from engine.board import Board, Color, point_to_step, step_to_point, opposite
 
 
@@ -156,3 +156,120 @@ def forms_illegal_block(board: Board, color: Color, move: Move) -> bool:
     if len(run) < 6:
         return False
     return not _opponent_has_checker_ahead(sim, color, run)
+
+
+def _expand_dice(dice: Tuple[int, int]) -> List[int]:
+    """4 moves on doubles, 2 otherwise."""
+    return [dice[0]] * 4 if dice[0] == dice[1] else [dice[0], dice[1]]
+
+
+def _legal_one_die_moves(board: Board, color: Color, die: int,
+                         head_rule: "HeadRule") -> List[Move]:
+    """All single-die moves legal on `board` for `color` with this `die`,
+    respecting head rule and six-block rule."""
+    moves = []
+    for from_pt in range(1, 25):
+        if not is_legal_single(board, color, from_pt, die):
+            continue
+        if not head_rule.head_allows(from_pt, board):
+            continue
+        candidate = make_single_move(board, color, from_pt, die)
+        if forms_illegal_block(board, color, candidate):
+            continue
+        moves.append(candidate)
+    return moves
+
+
+def _explore(board: Board, color: Color, remaining_dice: List[int],
+             head_rule: "HeadRule", path: List[Move],
+             collected: List[List[Move]]) -> None:
+    """DFS over orderings of `remaining_dice`, collecting every maximal
+    prefix path. Leaf = no dice left. Dead-end = no legal move for any
+    remaining die (the partial path is still recorded)."""
+    if not remaining_dice:
+        collected.append(list(path))
+        return
+
+    tried_any = False
+    unique_dice = []
+    seen = set()
+    for d in remaining_dice:
+        if d not in seen:
+            unique_dice.append(d)
+            seen.add(d)
+
+    for die in unique_dice:
+        moves = _legal_one_die_moves(board, color, die, head_rule)
+        for m in moves:
+            tried_any = True
+            new_board = board.clone()
+            apply_single(new_board, color, m)
+            new_hr = head_rule.clone()
+            if board.is_head(m.from_point, color):
+                new_hr.register_head_use()
+            new_remaining = list(remaining_dice)
+            new_remaining.remove(die)
+            path.append(m)
+            _explore(new_board, color, new_remaining, new_hr, path, collected)
+            path.pop()
+
+    if not tried_any:
+        collected.append(list(path))
+
+
+def _expected_die_for_move(move: Move, color: Color) -> int:
+    """Back-compute which die was used for a single move. For bear-off we
+    return the pip count that reached/overshot step 24 (sufficient to
+    distinguish which die was used when the two dice differ)."""
+    from_step = point_to_step(move.from_point, color)
+    if move.is_bear_off:
+        return 24 - from_step
+    to_step = point_to_step(move.to_point, color)
+    return to_step - from_step
+
+
+def generate_move_sequences(board: Board, color: Color,
+                            dice: Tuple[int, int],
+                            is_first_roll: bool) -> List[List[Move]]:
+    """Return all legal maximum-length move sequences for this turn.
+
+    Enforces:
+      - per-die legality (is_legal_single)
+      - head rule (HeadRule, with first-roll double exceptions)
+      - six-block rule (forms_illegal_block)
+      - full-turn rule: only sequences of maximum achievable length are kept
+      - larger-die preference: if only one die can be played and the dice
+        differ, sequences using the larger die are preferred when available.
+
+    If no legal move exists, returns `[[]]` (a single empty sequence)."""
+    remaining = _expand_dice(dice)
+    head_rule = HeadRule(color=color, is_first_roll=is_first_roll, dice=dice)
+    collected: List[List[Move]] = []
+    _explore(board, color, remaining, head_rule, [], collected)
+
+    unique = []
+    seen = set()
+    for seq in collected:
+        key = tuple((m.from_point, m.to_point, m.is_bear_off) for m in seq)
+        if key not in seen:
+            seen.add(key)
+            unique.append(seq)
+
+    if not unique:
+        return [[]]
+
+    max_len = max(len(s) for s in unique)
+    filtered = [s for s in unique if len(s) == max_len]
+
+    if max_len == 1 and dice[0] != dice[1]:
+        larger = max(dice)
+        has_larger = any(
+            _expected_die_for_move(s[0], color) == larger for s in filtered
+        )
+        if has_larger:
+            filtered = [s for s in filtered
+                        if _expected_die_for_move(s[0], color) == larger]
+
+    if not filtered:
+        return [[]]
+    return filtered
