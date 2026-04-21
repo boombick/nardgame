@@ -39,8 +39,10 @@ def step_to_point(step: int, color: Color) -> int:
 
 @dataclass
 class Board:
-    points: list = field(default_factory=list)
-    borne_off: dict = field(default_factory=dict)
+    """Immutable-layout board state for a two-player long backgammon game."""
+
+    points: list[PointState] = field(default_factory=list, init=False)
+    borne_off: dict[Color, int] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
         self.points = [PointState() for _ in range(25)]  # index 0 unused
@@ -51,12 +53,15 @@ class Board:
     # Queries ------------------------------------------------------------
 
     def is_head(self, point: int, color: Color) -> bool:
+        """Return True if point is the starting head point for color."""
         return point == (24 if color == Color.WHITE else 12)
 
     def is_home(self, point: int, color: Color) -> bool:
+        """Return True if point lies within color's home board."""
         return 18 <= point_to_step(point, color) <= 23
 
     def all_in_home(self, color: Color) -> bool:
+        """Return True if every remaining checker of color is in its home board."""
         for pt in range(1, 25):
             ps = self.points[pt]
             if ps.color == color and ps.count > 0 and not self.is_home(pt, color):
@@ -64,12 +69,14 @@ class Board:
         return True
 
     def count_at(self, point: int, color: Color) -> int:
+        """Return the number of color's checkers at point (0 if occupied by opponent)."""
         ps = self.points[point]
         return ps.count if ps.color == color else 0
 
     # Mutators -----------------------------------------------------------
 
     def remove_one(self, point: int, color: Color) -> None:
+        """Remove one checker of color from point; raise AssertionError if none present."""
         ps = self.points[point]
         assert ps.color == color and ps.count > 0, f"No {color} checker at {point}"
         ps.count -= 1
@@ -77,16 +84,19 @@ class Board:
             ps.color = None
 
     def place_one(self, point: int, color: Color) -> None:
+        """Place one checker of color on point; raise AssertionError if occupied by opponent."""
         ps = self.points[point]
         assert ps.color in (None, color), f"Point {point} occupied by opponent"
         ps.color = color
         ps.count += 1
 
     def bear_off_one(self, point: int, color: Color) -> None:
+        """Remove one checker of color from point and add it to the borne-off tally."""
         self.remove_one(point, color)
         self.borne_off[color] += 1
 
     def clone(self) -> "Board":
+        """Return an independent deep copy of this board."""
         new = Board.__new__(Board)
         new.points = [PointState(p.count, p.color) for p in self.points]
         new.borne_off = dict(self.borne_off)

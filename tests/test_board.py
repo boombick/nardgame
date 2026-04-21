@@ -83,10 +83,69 @@ class TestHomeAndHead:
         b = Board()
         for pt in range(13, 19):
             assert b.is_home(pt, Color.BLACK) is True
-        for pt in [1, 2, 12, 19, 20, 24]:
+        for pt in list(range(1, 13)) + list(range(19, 25)):
             assert b.is_home(pt, Color.BLACK) is False
 
     def test_all_in_home_initial_false(self):
         b = Board()
         assert b.all_in_home(Color.WHITE) is False
         assert b.all_in_home(Color.BLACK) is False
+
+
+class TestMutators:
+    def test_remove_one_decrements_count(self):
+        b = Board()
+        b.remove_one(24, Color.WHITE)
+        assert b.points[24].count == 14
+        assert b.points[24].color == Color.WHITE
+
+    def test_remove_one_clears_color_when_count_reaches_zero(self):
+        b = Board()
+        # Move all but one checker away so we can drain the last one
+        b.points[24].count = 1
+        b.remove_one(24, Color.WHITE)
+        assert b.points[24].count == 0
+        assert b.points[24].color is None
+
+    def test_place_one_sets_color_on_empty_point(self):
+        b = Board()
+        b.place_one(1, Color.WHITE)
+        assert b.points[1].color == Color.WHITE
+        assert b.points[1].count == 1
+
+    def test_place_one_stacks_on_own_color(self):
+        b = Board()
+        b.place_one(1, Color.WHITE)
+        b.place_one(1, Color.WHITE)
+        assert b.points[1].count == 2
+        assert b.points[1].color == Color.WHITE
+
+    def test_bear_off_one_increments_borne_off_and_removes_from_board(self):
+        b = Board()
+        initial_count = b.points[24].count
+        b.bear_off_one(24, Color.WHITE)
+        assert b.borne_off[Color.WHITE] == 1
+        assert b.points[24].count == initial_count - 1
+
+    def test_clone_is_independent_mutating_original_does_not_affect_clone(self):
+        b = Board()
+        c = b.clone()
+        b.remove_one(24, Color.WHITE)
+        assert c.points[24].count == 15  # clone unaffected
+
+    def test_clone_is_independent_mutating_clone_does_not_affect_original(self):
+        b = Board()
+        c = b.clone()
+        c.remove_one(12, Color.BLACK)
+        assert b.points[12].count == 15  # original unaffected
+
+    def test_remove_one_raises_when_no_own_checker(self):
+        b = Board()
+        with pytest.raises(AssertionError):
+            b.remove_one(1, Color.WHITE)  # point 1 is empty
+
+    def test_place_one_raises_when_occupied_by_opponent(self):
+        b = Board()
+        # Point 24 already has WHITE checkers; placing BLACK there must fail
+        with pytest.raises(AssertionError):
+            b.place_one(24, Color.BLACK)
