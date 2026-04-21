@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Tuple
-from engine.board import Board, Color, point_to_step, step_to_point
+from engine.board import Board, Color, point_to_step, step_to_point, opposite
 
 
 @dataclass(frozen=True)
@@ -111,3 +111,48 @@ class HeadRule:
         hr = HeadRule(self.color, self.is_first_roll, self.dice)
         hr._head_uses = self._head_uses
         return hr
+
+
+def _consecutive_run_through(board: Board, color: Color, pt: int) -> list:
+    """Return the sorted list of consecutive points (absolute 1..24, no wrap)
+    owned by `color` that includes `pt`. Returns [] if `pt` is not owned by color."""
+    if board.count_at(pt, color) == 0:
+        return []
+    run = [pt]
+    p = pt - 1
+    while p >= 1 and board.count_at(p, color) > 0:
+        run.append(p)
+        p -= 1
+    p = pt + 1
+    while p <= 24 and board.count_at(p, color) > 0:
+        run.append(p)
+        p += 1
+    return sorted(run)
+
+
+def _opponent_has_checker_ahead(board: Board, color: Color, run_points: list) -> bool:
+    """True if the opponent of `color` has any non-head checker ahead of the block —
+    i.e. past it in the block owner's direction of travel. A checker still sitting
+    on the opponent's head point has not yet entered play and does not count."""
+    opp = opposite(color)
+    block_max_owner_step = max(point_to_step(pt, color) for pt in run_points)
+    for p in range(1, 25):
+        if board.count_at(p, opp) > 0 and not board.is_head(p, opp):
+            if point_to_step(p, color) > block_max_owner_step:
+                return True
+    return False
+
+
+def forms_illegal_block(board: Board, color: Color, move: Move) -> bool:
+    """Return True if applying `move` would create an illegal 6-prime (six
+    consecutive own points with no opponent checker ahead). Bear-off moves
+    can never form a block."""
+    if move.is_bear_off:
+        return False
+    sim = board.clone()
+    sim.remove_one(move.from_point, color)
+    sim.place_one(move.to_point, color)
+    run = _consecutive_run_through(sim, color, move.to_point)
+    if len(run) < 6:
+        return False
+    return not _opponent_has_checker_ahead(sim, color, run)
