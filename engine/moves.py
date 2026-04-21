@@ -4,9 +4,10 @@ from engine.board import Board, Color, point_to_step, step_to_point
 
 @dataclass(frozen=True)
 class Move:
-    """A single-die move. `to_point` is 0 when `is_bear_off` is True."""
+    """A single-die move. `to_point` is 0 if and only if `is_bear_off` is True.
+    Construct via `make_single_move` to ensure this invariant holds."""
     from_point: int          # 1..24
-    to_point: int            # 1..24, or 0 for bear-off
+    to_point: int            # 1..24 for regular moves, 0 for bear-off
     is_bear_off: bool = False
 
 
@@ -18,8 +19,9 @@ def destination_step(from_point: int, die: int, color: Color) -> int:
 def is_bear_off_legal(board: Board, color: Color, from_point: int, die: int) -> bool:
     """True if bearing off from `from_point` with `die` is legal.
     Pre: a checker of `color` sits on from_point.
-    Requires: all 15 in home, and either exact die or overshoot with no higher-priority
-    (lower-step) home point occupied by `color`."""
+    Requires: all checkers in home, and either exact die (lands on step 24) or
+    overshoot (target > 24) with no own checker at a smaller step (farther from
+    the exit) within the home zone."""
     if not board.all_in_home(color):
         return False
     src_step = point_to_step(from_point, color)
@@ -55,10 +57,10 @@ def is_legal_single(board: Board, color: Color, from_point: int, die: int) -> bo
 
 def apply_single(board: Board, color: Color, move: Move) -> None:
     """Apply a single-die move to the board in place."""
-    board.remove_one(move.from_point, color)
     if move.is_bear_off:
-        board.borne_off[color] += 1
+        board.bear_off_one(move.from_point, color)
     else:
+        board.remove_one(move.from_point, color)
         board.place_one(move.to_point, color)
 
 

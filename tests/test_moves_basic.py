@@ -1,4 +1,3 @@
-import pytest
 from engine.board import Board, Color
 from engine.moves import Move, is_legal_single, apply_single
 
@@ -39,14 +38,14 @@ class TestIsLegalSingle:
         assert is_legal_single(b, Color.WHITE, 24, 5) is True
 
     def test_cannot_bear_off_when_not_home(self):
-        assert is_legal_single(Board(), Color.WHITE, 24, 5) is True
         b = Board()
-        b.points[24].count = 0
-        b.points[24].color = None
-        b.points[6].count = 15
+        # 14 at head (not in home), 1 in home at pt 6
+        b.points[24].count = 14
+        b.points[24].color = Color.WHITE
+        b.points[6].count = 1
         b.points[6].color = Color.WHITE
-        # from pt 24 with no checker -> illegal
-        assert is_legal_single(b, Color.WHITE, 24, 6) is False
+        # Bear-off from pt 6 with die=6 should be rejected (all_in_home False)
+        assert is_legal_single(b, Color.WHITE, 6, 6) is False
 
     def test_bear_off_exact(self):
         b = Board()
