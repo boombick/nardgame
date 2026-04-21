@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Tuple
 from engine.board import Board, Color, point_to_step, step_to_point
 
 
@@ -75,9 +76,6 @@ def make_single_move(board: Board, color: Color, from_point: int, die: int) -> M
                 is_bear_off=False)
 
 
-from typing import Tuple
-
-
 _FIRST_ROLL_DOUBLE_EXCEPTIONS = {(6, 6), (4, 4), (3, 3)}
 
 
@@ -88,7 +86,7 @@ class HeadRule:
     color: Color
     is_first_roll: bool
     dice: Tuple[int, int]
-    _head_uses: int = 0
+    _head_uses: int = field(default=0, init=False)
 
     @property
     def max_head_uses(self) -> int:
