@@ -73,3 +73,43 @@ def make_single_move(board: Board, color: Color, from_point: int, die: int) -> M
     return Move(from_point=from_point,
                 to_point=step_to_point(target_step, color),
                 is_bear_off=False)
+
+
+from typing import Tuple
+
+
+_FIRST_ROLL_DOUBLE_EXCEPTIONS = {(6, 6), (4, 4), (3, 3)}
+
+
+@dataclass
+class HeadRule:
+    """Tracks head-use count per turn; exposes whether further head-moves are allowed.
+    On the first roll of the game, doubles 6-6 / 4-4 / 3-3 allow 2 head-uses instead of 1."""
+    color: Color
+    is_first_roll: bool
+    dice: Tuple[int, int]
+    _head_uses: int = 0
+
+    @property
+    def max_head_uses(self) -> int:
+        """Maximum number of checkers that may leave the head this turn."""
+        if self.is_first_roll and self.dice in _FIRST_ROLL_DOUBLE_EXCEPTIONS:
+            return 2
+        return 1
+
+    def head_allows(self, from_point: int, board: Board) -> bool:
+        """Return True if a move leaving `from_point` is allowed by the head rule.
+        Non-head origins are always allowed."""
+        if not board.is_head(from_point, self.color):
+            return True
+        return self._head_uses < self.max_head_uses
+
+    def register_head_use(self) -> None:
+        """Record that one checker left the head this turn."""
+        self._head_uses += 1
+
+    def clone(self) -> "HeadRule":
+        """Return an independent copy that shares no state with the original."""
+        hr = HeadRule(self.color, self.is_first_roll, self.dice)
+        hr._head_uses = self._head_uses
+        return hr
