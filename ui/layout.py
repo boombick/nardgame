@@ -16,8 +16,8 @@ class BoardLayout:
     `checker_positions` helper to draw; no pygame imports here so the whole
     module stays unit-testable."""
 
-    screen_w: int = 1280
-    screen_h: int = 800
+    screen_w: int = 1360
+    screen_h: int = 960
     board_width: int = 1024
     board_height: int = 640
     bar_width: int = 32

@@ -16,7 +16,7 @@ def _pygame_display():
     # GameScreen constructs SysFonts at import, so we need a live pygame
     # display. One module-scoped init avoids paying it per test.
     pygame.init()
-    pygame.display.set_mode((1280, 800))
+    pygame.display.set_mode((1360, 960))
     yield
     pygame.quit()
 

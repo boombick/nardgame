@@ -90,16 +90,16 @@ class MenuScreen:
         self.app = app
         self.font = pygame.font.SysFont("sans", 22)
         self.buttons = [
-            Button((540, 200, 200, 40), "Human vs Human",
+            Button((580, 280, 200, 40), "Human vs Human",
                    lambda: app.start_game(white=None, black=None)),
-            Button((540, 260, 200, 40), "Human vs Local",
+            Button((580, 340, 200, 40), "Human vs Local",
                    lambda: app.start_game(white=None, black=RandomLocalModel())),
-            Button((540, 320, 200, 40), "Human vs OpenRouter",
+            Button((580, 400, 200, 40), "Human vs OpenRouter",
                    lambda: app.start_game(white=None, black=app.make_openrouter())),
-            Button((540, 380, 200, 40), "Local vs OpenRouter",
+            Button((580, 460, 200, 40), "Local vs OpenRouter",
                    lambda: app.start_game(white=RandomLocalModel(),
                                           black=app.make_openrouter())),
-            Button((540, 440, 200, 40), "Watch replay",
+            Button((580, 520, 200, 40), "Watch replay",
                    lambda: app.open_replay_prompt()),
         ]
 
@@ -112,7 +112,7 @@ class MenuScreen:
 
     def draw(self, screen):
         screen.fill((240, 230, 210))
-        _draw_text(screen, self.font, "Long Backgammon (nardy)", (520, 120))
+        _draw_text(screen, self.font, "Long Backgammon (nardy)", (560, 200))
         for b in self.buttons:
             b.draw(screen, self.font)
 
@@ -157,14 +157,14 @@ class GameScreen:
         # in the middle. Start button sits over the board (shown only during
         # the _START banner). The game-over buttons sit in the same central
         # band as the start button, side by side.
-        self.roll_button = Button((1168, 280, 96, 40), "Roll", self._on_roll)
-        self.undo_button = Button((1148, 225, 116, 40), "Отменить",
+        self.roll_button = Button((1208, 360, 96, 40), "Roll", self._on_roll)
+        self.undo_button = Button((1188, 305, 116, 40), "Отменить",
                                   self._on_undo)
-        self.start_button = Button((580, 400, 120, 50), "Старт",
+        self.start_button = Button((620, 480, 120, 50), "Старт",
                                    self._on_start)
-        self.again_button = Button((500, 460, 130, 50), "Новая игра",
+        self.again_button = Button((540, 540, 130, 50), "Новая игра",
                                    self._on_again)
-        self.menu_button = Button((650, 460, 130, 50), "В меню",
+        self.menu_button = Button((690, 540, 130, 50), "В меню",
                                   self._on_menu)
 
         # Board used exclusively for rendering. Lags the real `game.board`
@@ -631,7 +631,7 @@ class GameScreen:
             turn_lbl = f"Ход: {_COLOR_RU[self.game.current_player]}"
             if self.state == _MOVING and self.anim_player is not None:
                 turn_lbl = f"Ход: {_COLOR_RU[self.anim_player]} (анимация…)"
-            _draw_text(screen, self.font, turn_lbl, (1168, 350))
+            _draw_text(screen, self.font, turn_lbl, (1208, 430))
         self._draw_bot_msg(screen)
         if self.status and self.state != _OVER:
             _draw_text(screen, self.font, self.status, (20, 10))
@@ -661,23 +661,28 @@ class GameScreen:
 
     def _draw_bot_msg(self, screen):
         # A clearly-bordered panel below the board so the bot's latest move
-        # and reason have their own visual space and aren't mistaken for
-        # board chrome. Two lines of word-wrapped text fit inside.
+        # and reason have their own visual space. The panel fills the whole
+        # vertical gap between the board and the window bottom so that
+        # lengthy reasoning chains from reasoning-style models (eval + reason
+        # can easily run 5-7 wrapped lines) are shown in full instead of
+        # silently truncated.
         L = self.layout
         panel_x = 12
         panel_y = L.board_top + L.board_height + 16
         panel_w = L.screen_w - 24
-        panel_h = 56
+        panel_h = L.screen_h - panel_y - 12
         pygame.draw.rect(screen, (250, 245, 225),
                          (panel_x, panel_y, panel_w, panel_h))
         pygame.draw.rect(screen, (80, 60, 40),
                          (panel_x, panel_y, panel_w, panel_h), 2)
         if not self.last_bot_msg:
             return
+        line_h = 22
+        max_lines = max(1, (panel_h - 12) // line_h)
         lines = self._wrap_text(self.last_bot_msg, self.font, panel_w - 20)
-        for i, line in enumerate(lines[:2]):
+        for i, line in enumerate(lines[:max_lines]):
             _draw_text(screen, self.font, line,
-                       (panel_x + 10, panel_y + 6 + i * 22))
+                       (panel_x + 10, panel_y + 6 + i * line_h))
 
     def _draw_bear_off_trays(self, screen, highlight_zero: bool):
         """Draw both bear-off trays with the current pile of borne-off
@@ -717,7 +722,7 @@ class GameScreen:
         screen.blit(overlay, (0, 0))
         title = f"{_COLOR_RU[self.game.current_player]} начинают!"
         surf = self.banner_font.render(title, True, (245, 240, 210))
-        screen.blit(surf, (L.screen_w // 2 - surf.get_width() // 2, 280))
+        screen.blit(surf, (L.screen_w // 2 - surf.get_width() // 2, 360))
         self.start_button.draw(screen, self.font)
 
     def _draw_over_banner(self, screen):
@@ -738,13 +743,13 @@ class GameScreen:
         t_surf = self.banner_font.render(title, True, (245, 240, 210))
         s_surf = self.font.render(subtitle, True, (230, 220, 190))
         screen.blit(t_surf,
-                    (L.screen_w // 2 - t_surf.get_width() // 2, 260))
+                    (L.screen_w // 2 - t_surf.get_width() // 2, 340))
         screen.blit(s_surf,
-                    (L.screen_w // 2 - s_surf.get_width() // 2, 330))
+                    (L.screen_w // 2 - s_surf.get_width() // 2, 410))
         if self.status:
             p_surf = self.font.render(self.status, True, (200, 200, 185))
             screen.blit(p_surf,
-                        (L.screen_w // 2 - p_surf.get_width() // 2, 370))
+                        (L.screen_w // 2 - p_surf.get_width() // 2, 450))
         self.again_button.draw(screen, self.font)
         self.menu_button.draw(screen, self.font)
 
@@ -807,9 +812,9 @@ class GameScreen:
         slots get a darker overlay and a diagonal strike-through so the
         player can see at a glance which dice still have moves in them."""
         L = self.layout
-        # Slot geometry: keep 64px squares; for doubles we now need two
-        # columns, so pull black's anchor further left to keep the grid in
-        # the 128px-wide margin.
+        # Slot geometry: keep 64px squares; for doubles the grid is two
+        # columns (64 + 80 = 144px wide), so the window is sized to give
+        # each side a margin wider than that (see BoardLayout defaults).
         base_x_for = {Color.BLACK: 16,
                       Color.WHITE: L.board_left + L.board_width + 16}
         base_y = L.board_top + L.board_height - 160
@@ -899,13 +904,13 @@ class ReplayScreen:
         print(f"[REPLAY] Loaded {path} "
               f"({self.replay.total_steps()} half-moves)")
         self.buttons = [
-            Button((20, 660, 80, 40), "<<",
+            Button((20, 820, 80, 40), "<<",
                    lambda: self.replay.step_backward()),
-            Button((110, 660, 80, 40), "Play/Pause",
+            Button((110, 820, 80, 40), "Play/Pause",
                    lambda: self._toggle()),
-            Button((200, 660, 80, 40), ">>",
+            Button((200, 820, 80, 40), ">>",
                    lambda: self.replay.step_forward()),
-            Button((290, 660, 80, 40), "Menu",
+            Button((290, 820, 80, 40), "Menu",
                    lambda: app.goto_menu()),
         ]
 
@@ -930,5 +935,5 @@ class ReplayScreen:
             screen, self.font,
             f"Step {self.replay.current_move_index + 1}/"
             f"{self.replay.total_steps()}",
-            (400, 670),
+            (440, 830),
         )

@@ -49,7 +49,7 @@ def run():
         return app
     pygame.init()
     app = App()
-    app.screen = pygame.display.set_mode((1280, 800))
+    app.screen = pygame.display.set_mode((1360, 960))
     pygame.display.set_caption("Long Backgammon")
     app.active = MenuScreen(app)
     clock = pygame.time.Clock()
