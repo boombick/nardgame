@@ -29,16 +29,21 @@ class Game:
         self.current_player: Optional[Color] = None
         self.dice: Optional[Tuple[int, int]] = None
         self.history: List[TurnRecord] = []
-        self._rng = rng if rng is not None else random.Random()
+        # SystemRandom draws fresh entropy from the OS for every call, so
+        # long runs can't fall into a pattern users might perceive as biased.
+        self._rng = rng if rng is not None else random.SystemRandom()
         self._has_played = {Color.WHITE: False, Color.BLACK: False}
 
     # Start ---------------------------------------------------------------
 
     def determine_starter(self) -> Color:
         """Roll one die per side until unequal; higher wins and starts."""
+        attempt = 0
         while True:
+            attempt += 1
             w = self._rng.randint(1, 6)
             b = self._rng.randint(1, 6)
+            print(f"[STARTER roll {attempt}] W={w} B={b}")
             if w > b:
                 self.current_player = Color.WHITE
                 return Color.WHITE

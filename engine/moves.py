@@ -131,15 +131,16 @@ def _consecutive_run_through(board: Board, color: Color, pt: int) -> list:
 
 
 def _opponent_has_checker_ahead(board: Board, color: Color, run_points: list) -> bool:
-    """True if the opponent of `color` has any non-head checker ahead of the block —
-    i.e. past it in the block owner's direction of travel. A checker still sitting
-    on the opponent's head point has not yet entered play and does not count."""
+    """Per game-design spec: a 6-block is legal only if at least one opponent
+    checker is already in the opponent's own home board. This is stricter
+    than "past the block" positional checks and matches the explicit rule:
+    "Выстроить заграждение из 6 шашек можно, только если хотя бы одна шашка
+    противника уже находится в его доме." The `run_points` parameter is
+    kept for API compatibility but not needed under this rule."""
     opp = opposite(color)
-    block_max_owner_step = max(point_to_step(pt, color) for pt in run_points)
     for p in range(1, 25):
-        if board.count_at(p, opp) > 0 and not board.is_head(p, opp):
-            if point_to_step(p, color) > block_max_owner_step:
-                return True
+        if board.count_at(p, opp) > 0 and board.is_home(p, opp):
+            return True
     return False
 
 
