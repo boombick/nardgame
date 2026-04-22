@@ -2,30 +2,222 @@ import random
 import re
 from typing import Callable, List, Optional, Tuple
 
-from engine.board import Board, Color
-from engine.moves import Move
+from engine.board import Board, Color, point_to_step
+from engine.moves import Move, apply_single
 from models.base import BaseModel
-from notation.writer import format_move
 from opponents.local_model import RandomLocalModel
 
 
+def _classify_point(pt: int, owner: Color) -> str:
+    """Return a short role tag for `pt` from `owner`'s perspective.
+
+    Produced for every checker's point in the listing so the model cannot
+    misread a black checker on pt5 as "in its home" — it sees the literal
+    string `[транзит через дом белых]`. The tags only encode board roles,
+    not positional judgement, so they're safe to bake into the prompt.
+    """
+    # Heads
+    if owner == Color.WHITE and pt == 24:
+        return "голова белых"
+    if owner == Color.BLACK and pt == 12:
+        return "голова чёрных"
+    # Own home
+    if owner == Color.WHITE and 1 <= pt <= 6:
+        return "дом белых"
+    if owner == Color.BLACK and 13 <= pt <= 18:
+        return "дом чёрных"
+    # Opponent's home — transit only; the model keeps mistaking these for
+    # bearing-off territory, hence the explicit "транзит" word.
+    if owner == Color.WHITE and 13 <= pt <= 18:
+        return "транзит через дом чёрных"
+    if owner == Color.BLACK and 1 <= pt <= 6:
+        return "транзит через дом белых"
+    return ""
+
+
+def _pip_count(board: Board, color: Color) -> int:
+    """Sum of pips-to-off across all of `color`'s checkers on the board.
+
+    Lower is better. At the starting position each side has 15 checkers at
+    step 0 (head), each 24 pips from bearing off — so total = 360. This is
+    a standard backgammon metric and gives the model an objective number to
+    compare sides instead of guessing from the raw point counts."""
+    total = 0
+    for pt in range(1, 25):
+        ps = board.points[pt]
+        if ps.color == color and ps.count > 0:
+            step = point_to_step(pt, color)   # 0 = head, 23 = deepest home
+            total += (24 - step) * ps.count
+    return total
+
+
+def _opponent_before_home(board: Board, color: Color) -> int:
+    """How many of the opponent's checkers still sit outside their own home.
+
+    "Before home" = step 0..17 in the opponent's step-space. When this is 0,
+    the opponent has already collected everything into its home zone and
+    blocking is pointless — any block in a transit zone would catch air.
+    We expose this number raw in the prompt so the model can key its phase
+    judgement on a single objective integer instead of guessing from the
+    position listing."""
+    opp = Color.BLACK if color == Color.WHITE else Color.WHITE
+    total = 0
+    for pt in range(1, 25):
+        ps = board.points[pt]
+        if ps.color == opp and ps.count > 0:
+            if point_to_step(pt, opp) < 18:
+                total += ps.count
+    return total
+
+
+def _phase(board: Board, color: Color) -> str:
+    """Classify the board into a strategic phase from `color`'s POV.
+
+    * "endgame" — all 15 of my checkers are in my home; bearing-off dominates.
+    * "race"    — opponent has nothing left to block (all in their home); no
+                  point building walls, maximise Δpip.
+    * "contact" — default: paths still cross, blocks matter.
+
+    The classification is deterministic so the prompt can print one label
+    instead of asking the LLM to derive it. This removes the recurring
+    failure where the model yells "блок!" in positions where no block can
+    possibly catch anything."""
+    if board.all_in_home(color):
+        return "endgame"
+    if _opponent_before_home(board, color) == 0:
+        return "race"
+    return "contact"
+
+
+def _delta_pip(board: Board, color: Color, seq: List[Move]) -> int:
+    """Pip-reduction achieved by applying `seq` to a clone of `board`.
+
+    Positive = my pip count decreased by that many. `apply_single` mutates
+    in place, so we clone first. This is the raw scoring signal the model
+    needs to compare race candidates head-to-head without doing the sum
+    itself (and getting it wrong — observed in logs)."""
+    before = _pip_count(board, color)
+    sim = board.clone()
+    for m in seq:
+        apply_single(sim, color, m)
+    after = _pip_count(sim, color)
+    return before - after
+
+
+def _is_dead_zone_move(board: Board, color: Color, seq: List[Move]) -> bool:
+    """True if `seq` drops a checker into the opponent's home *and* the
+    opponent is already fully collected there.
+
+    "Dead zone" because once the opponent's checkers are all in their home,
+    a block on that home catches zero checkers — it's just pip wasted on
+    the long way back. We only flag moves in `race` phase (i.e. blocking
+    impossible). In `contact` the same landing might set up a future block,
+    so we leave it alone."""
+    if _phase(board, color) != "race":
+        return False
+    # Opponent's home = my "mirror" home by point index.
+    opp_home_range = range(13, 19) if color == Color.WHITE else range(1, 7)
+    sim = board.clone()
+    before = sum(1 for pt in opp_home_range
+                 if sim.points[pt].color == color
+                 and sim.points[pt].count > 0)
+    for m in seq:
+        apply_single(sim, color, m)
+    after = sum(1 for pt in opp_home_range
+                if sim.points[pt].color == color
+                and sim.points[pt].count > 0)
+    # Landing more own checkers in the opponent's home after the move than
+    # before = this sequence parks something in the dead zone.
+    return after > before
+
+
+def _head_left(board: Board, color: Color) -> int:
+    """How many of color's 15 checkers still sit on their head point."""
+    head_pt = 24 if color == Color.WHITE else 12
+    ps = board.points[head_pt]
+    return ps.count if ps.color == color else 0
+
+
 def _describe_board(board: Board, color: Color) -> str:
-    """Compact text description of the board from `color`'s perspective."""
+    """Compact text description of the board from `color`'s perspective.
+
+    Each occupied point carries a `[role]` tag for its owner (`голова
+    чёрных`, `дом белых`, `транзит через дом чёрных`, …) so the model
+    cannot confuse its own home with the opponent's. A summary line adds
+    pip counts and how many checkers are still stuck on each head — both
+    objective numbers the model would otherwise have to derive itself."""
     rows = []
     for pt in range(1, 25):
         ps = board.points[pt]
         if ps.count > 0 and ps.color is not None:
-            rows.append(f"  pt{pt}: {ps.count} {ps.color.value}")
+            tag = _classify_point(pt, ps.color)
+            suffix = f"  [{tag}]" if tag else ""
+            rows.append(f"  pt{pt}: {ps.count} {ps.color.value}{suffix}")
     borne = board.borne_off
-    return (f"On-turn: {color.value.upper()}\n"
-            f"Board:\n" + "\n".join(rows) +
-            f"\nBorne off: white={borne[Color.WHITE]}, black={borne[Color.BLACK]}")
+    head_w = _head_left(board, Color.WHITE)
+    head_b = _head_left(board, Color.BLACK)
+    pip_w = _pip_count(board, Color.WHITE)
+    pip_b = _pip_count(board, Color.BLACK)
+    phase = _phase(board, color)
+    opp_before = _opponent_before_home(board, color)
+    # Derived guidance per phase — written out so the model has a single
+    # canonical instruction for each regime instead of re-deriving it.
+    phase_ru = {
+        "contact": "контакт (пути пересекаются, блоки осмысленны)",
+        "race":    "гонка (сопернику уже нечем грозить — максимизируй Δpip)",
+        "endgame": "эндшпиль (все свои в доме — равномерно заполняй без дыр)",
+    }[phase]
+    opp_color_ru = "белых" if color == Color.BLACK else "чёрных"
+    return (
+        f"On-turn: {color.value.upper()}\n"
+        f"Board:\n" + "\n".join(rows) +
+        f"\nШашек на голове (ещё не тронулись): белые {head_w}/15, "
+        f"чёрные {head_b}/15."
+        f"\nШашек ушло с головы: белые {15 - head_w}/15, "
+        f"чёрные {15 - head_b}/15."
+        f"\nPip count (сумма шагов до выхода у всех шашек; меньше = ближе "
+        f"к победе):"
+        f"\n  белые: {pip_w}"
+        f"\n  чёрные: {pip_b}"
+        f"\nBorne off: white={borne[Color.WHITE]}, "
+        f"black={borne[Color.BLACK]}"
+        f"\nШашек соперника ещё не в своём доме: {opp_before} {opp_color_ru} "
+        f"из 15 (когда 0 — блокировать уже нечего, идёт гонка)."
+        f"\nФаза: {phase_ru}."
+    )
 
 
 def _describe_sequence(seq: List[Move]) -> str:
+    """Render a move sequence so it's unambiguous *which* checker moves.
+
+    Chained moves (where one move's destination is the next move's source)
+    are merged into a single arrow chain like `12→6→4`, signalling that the
+    same checker passes through the intermediate point without stopping.
+    Different checkers within the same turn are separated by `, `. Bear-offs
+    render as `→off`. Example:
+        [12/6, 6/4, 24/21]          → "12→6→4, 24→21"
+        [9/4, 4/off]                → "9→4→off"
+
+    We avoid `notation.writer.format_move` here because the .narde save
+    format intentionally uses `/` and must stay stable across versions; the
+    prompt rendering is free to use a clearer in-place notation."""
     if not seq:
         return "(skip)"
-    return " ".join(format_move(m) for m in seq)
+    groups: List[List[Move]] = []
+    for m in seq:
+        if (groups
+                and not groups[-1][-1].is_bear_off
+                and groups[-1][-1].to_point == m.from_point):
+            groups[-1].append(m)
+        else:
+            groups.append([m])
+    rendered: List[str] = []
+    for g in groups:
+        parts = [str(g[0].from_point)]
+        for m in g:
+            parts.append("off" if m.is_bear_off else str(m.to_point))
+        rendered.append("→".join(parts))
+    return ", ".join(rendered)
 
 
 # Compact rulebook baked into every prompt. Keep this in sync with the
@@ -63,13 +255,50 @@ BOARD_LAYOUT = """Разметка доски (нумерация 1..24, вид 
 * Белые: 24 → 19 → 18 → 13 → 12 → 7 → 6 → 1 → off (выход справа внизу).
 * Чёрные: 12 → 7 → 6 → 1 → 24 → 19 → 18 → 13 → off (выход слева сверху).
 * Голова — стартовый пункт своей стороны (белые: 24, чёрные: 12).
-* Дом — последние 6 пунктов перед выбрасыванием (белые: 1..6, чёрные: 13..18)."""
+* Дом — последние 6 пунктов перед выбрасыванием (белые: 1..6, чёрные: 13..18).
+
+Дома не пересекаются:
+* Чёрные не выбрасываются из pt1..6 — это дом белых. Чёрная шашка на pt1..6 проходит транзитом по пути к перевалу через pt24 и продолжит 24→19→…→13.
+* Белые не выбрасываются из pt13..18 — это дом чёрных. Белая шашка на pt13..18 проходит транзитом по пути к pt12→7→6→1.
+
+Стартовая расстановка: 15 белых на pt24, 15 чёрных на pt12. Большое число шашек на своей голове — это нетронутый старт, т.е. *отставание*, а не достижение. Продвижение считается по шашкам, уже ушедшим с головы."""
 
 
 NOTATION = """Нотация в этом промпте:
 * Состояние доски задано строками вида «  ptN: M color», где N — номер пункта (1..24), M — сколько шашек на пункте, color — white/black.
 * «Borne off» — сколько шашек каждая сторона уже выбросила (из 15). После 15 партия окончена.
-* Ходы пишутся как «from/to» (например 24/21 — шашка с пункта 24 на 21) или «from/off» — выбрасывание. Последовательность ходов в рамках одного броска записывается через пробел."""
+* Отдельный ход пишется как «from→to» (например 24→21 — шашка с пункта 24 на 21) или «from→off» — выбрасывание.
+* Если в варианте стрелки идут подряд без запятой (например «12→6→4»), это означает, что *одна и та же шашка* прошла 12→6, затем 6→4. На промежуточных пунктах (здесь pt6) она не остаётся — ставить блок или занять пункт она не может.
+* Разные шашки в одном броске разделяются запятой: «24→21, 12→10» — две разные шашки, одна с pt24 на pt21, вторая с pt12 на pt10."""
+
+
+# Strategic guidance. Without this the model reduces every decision to
+# "minimise my pip count this turn" — which loses to blocking and to
+# premature home-collection. Laid out as three phases plus named concepts
+# (арьергард, темп, марс-рескью) so the model can refer back to them in
+# its Оценка/Объяснение lines.
+STRATEGY = """Стратегия (обязательно учитывай при оценке и выборе хода):
+
+Три фазы партии:
+1. Гонка (race) — траектории сторон не пересекаются или почти не пересекаются, блокировать соперника уже невозможно. Задача: минимизировать pip count, выбрасывать максимально эффективно.
+2. Блокирование (blocking) — шашки соперника ещё должны пройти через твою зону. Задача: выстраивать заслоны из 2+ подряд занятых пунктов перед бегущими шашками соперника. Лучший заслон — 6 подряд (полный блок, если это разрешено правилом 6-блока).
+3. Эндшпиль — когда почти все шашки в доме. Задача: ровно заполнять дом, не плодить «дыры», держать шашки далеко от выхода пока не выпали нужные кости.
+
+Ключевые понятия:
+* Арьергард — твои последние шашки (ближайшие к голове). Их не надо гнать вслепую: один-два арьергардных бойца можно использовать, чтобы поздно пройти мимо соперника и успеть поставить неожиданный блок. Арьергард ценен именно *угрозой* блока.
+* Темп — кто опережает по pip count. Ведущий играет на гонку (безопасный разгон вперёд), отстающий играет на блок (пытается задержать соперника своими пунктами в его транзитной зоне).
+* Марс/ойн — проигрыш с 0 выброшенных = марс (-2 очка), с ≥1 выброшенным = ойн (-1). Если проигрываешь гонку, имеет смысл жертвовать темпом ради блокировки соперника, чтобы успеть выбросить хотя бы одну шашку (рескью от марса).
+
+Типичные ошибки, которых надо избегать:
+* Не собирай весь дом рано. Если у соперника ещё идут шашки через твою зону, ранний перевод всех своих в дом = потеря возможности блокировать. Держи 2-4 шашки на подходе к дому как заслон, пока соперник не пройдёт.
+* Не ставь одинокие шашки на пункты, где соперник может построить свой блок, запирая их. В длинных нардах сбития нет, но запертые шашки = мёртвый груз по pip.
+* Не гони всё подряд на голову-2/голову-3 в первые ходы: это короткий темп без структуры. Ищи ходы, которые создают связку из 2+ своих подряд или идут в дом по плану.
+
+Как выбирать ход:
+1. Определи текущую фазу (гонка / блок / эндшпиль).
+2. Сравни pip count — ты ведёшь или отстаёшь.
+3. Из двух кандидатов предпочти тот, что либо создаёт/удерживает заслон против бегущих шашек соперника, либо (в гонке) продвигает самую заднюю собственную шашку, либо (в эндшпиле) равномерно заполняет дом без дыр.
+4. Не выбирай ход просто по минимальному pip: иногда правильный ход оставляет pip чуть выше, но задерживает соперника на несколько ходов."""
 
 
 def build_prompt(board: Board, color: Color,
@@ -92,6 +321,8 @@ def build_prompt(board: Board, color: Color,
         "",
         NOTATION,
         "",
+        STRATEGY,
+        "",
         f"Сейчас ход: {color.value.upper()}.",
         f"Кости: {dice[0]}-{dice[1]}",
         _describe_board(board, color),
@@ -99,15 +330,76 @@ def build_prompt(board: Board, color: Color,
         "Варианты ходов (все — законные и максимальной длины):",
     ]
     for i, seq in enumerate(sequences, start=1):
-        lines.append(f"  {i}) {_describe_sequence(seq)}")
+        # Δpip and dead-zone flags let the model compare candidates without
+        # mentally simulating each one — pure pip-race decisions can be
+        # made by index lookup, and parking-into-a-dead-home is visible at
+        # a glance.
+        tags: List[str] = []
+        dpip = _delta_pip(board, color, seq)
+        # Use the Unicode minus (U+2212) so the sign reads as a math minus
+        # in logs, not a hyphen-run-together.
+        tags.append(f"Δpip=\u2212{dpip}" if dpip >= 0
+                    else f"Δpip=+{-dpip}")
+        if _is_dead_zone_move(board, color, seq):
+            tags.append("мёртвая зона: шашка идёт в дом соперника, "
+                        "где блок уже ничего не даёт")
+        suffix = "  (" + "; ".join(tags) + ")" if tags else ""
+        lines.append(f"  {i}) {_describe_sequence(seq)}{suffix}")
     lines += [
         "",
         "Ответ строго тремя строками в этом порядке, каждая с меткой и "
         "двоеточием, по-русски:",
-        "  Оценка: одна фраза (≤20 слов) — кто сейчас сильнее и почему "
-        "(структура дома, блоки, позиция головы, запертые шашки и т.п.).",
+        "  Оценка: одна фраза (≤25 слов) — укажи фазу партии "
+        "(гонка / блок / эндшпиль), кто ведёт по pip, и свой план на 2-3 "
+        "хода вперёд (какой заслон строишь, какую шашку гонишь, что "
+        "удерживаешь).",
         "  Ход: только целое число 1..N — номер выбранной последовательности.",
-        "  Объяснение: одна фраза (≤20 слов) — что даёт именно этот ход.",
+        "  Объяснение: одна фраза (≤20 слов) — как выбранный ход воплощает "
+        "план из Оценки.",
+        "",
+        # Guardrails distilled from observed model mistakes: LLMs trained
+        # on short/classical backgammon tend to drag in hit/blot concepts
+        # and misread the starting head stack as "advanced". State both
+        # traps explicitly so the model can't silently apply them.
+        "ВАЖНО при оценке:",
+        "* В длинных нардах НЕТ сбития шашек (no hitting). Не используй "
+        "понятия «давление на блот», «попадание», «снятие», «удар» — их "
+        "здесь нет. Одиночная шашка соперника неуязвима.",
+        "* Шашки на своей голове — отстающие, а не продвинутые. Если на "
+        "pt24 стоит 14 белых — это значит ушла ровно 1 белая, а не 14.",
+        "* Траектория «a→b→c» — одна шашка, проходящая через b. На b она "
+        "не остаётся; ни блока, ни занятия pt=b этот ход не создаёт.",
+        "* Дом белых = pt1..6, дом чёрных = pt13..18 — они разные и не "
+        "пересекаются. Свой цвет на pt1..6 — это дом только для белых; "
+        "чёрная шашка там — транзит, а не готовность к выбрасыванию. И "
+        "наоборот для pt13..18.",
+        "* Для сравнения сторон опирайся на pip count и число шашек, "
+        "ушедших с головы, из описания позиции выше — это объективные "
+        "числа. Кто ближе к победе — у кого pip меньше.",
+        "* Блок — это ≥2 твоих шашек на каждом из ≥2 соседних пунктов "
+        "подряд (например 2+ на pt14 И 2+ на pt15). Одиночная шашка "
+        "(ровно 1) на пункте — это НЕ блок: соперник проходит её любым "
+        "броском. «Блок 13-14» с одиночками в обоих пунктах — фикция.",
+        "* Блок (настоящий) на пути бегущих шашек соперника ценнее, "
+        "чем -1 pip на этом ходу. Ищи возможности построить или удержать "
+        "заслон, особенно если отстаёшь по pip.",
+        "* Если в описании позиции фаза — «гонка», любые рассуждения про "
+        "блоки не имеют смысла: соперник уже дома или близко к нему, "
+        "блокировать нечего. Выбирай ход с максимальным Δpip.",
+        "* Кандидаты помечены метрикой «(Δpip=−N)» — насколько ход снижает "
+        "твой pip. В гонке и эндшпиле ориентируйся на это число.",
+        "* Метка «мёртвая зона» у кандидата означает, что шашка заходит в "
+        "дом соперника, где все соперниковы шашки уже собрались — такой "
+        "ход не блокирует ничего и уводит шашку на длинный круг обратно. "
+        "Не выбирай такой ход, если есть альтернатива без этой метки.",
+        "* Не собирай весь дом рано: пока соперник ещё идёт через твою "
+        "транзитную зону, держи 2-4 шашки снаружи дома как потенциальный "
+        "заслон. Ранний сбор всех в дом = отказ от блокирования.",
+        "* Арьергардные шашки (последние, ближе к голове) — ресурс угрозы "
+        "блоком, а не отстающий балласт. Не обязательно гнать их первыми.",
+        "* Если проигрываешь по pip — играй от блокирования, задержи "
+        "соперника, чтобы успеть выбросить хотя бы одну шашку (иначе марс, "
+        "-2 очка вместо -1).",
     ]
     return "\n".join(lines)
 
@@ -201,12 +493,13 @@ class OpenRouterModel(BaseModel):
         self.last_evaluation: str = ""
 
     def _default_http(self, prompt: str) -> str:
+        # The full prompt is deterministic given board+color+dice (all
+        # three are logged in choose_move), so printing it here every turn
+        # is just noise. We keep the one-line URL marker and the response
+        # block because the response is what actually differs per call.
         import requests
         url = "https://openrouter.ai/api/v1/chat/completions"
         print(f"[OPENROUTER] POST {url}  model={self.model}")
-        print("[OPENROUTER] --- REQUEST PROMPT ---")
-        print(prompt)
-        print("[OPENROUTER] --- END REQUEST ---")
         r = requests.post(
             url,
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -236,6 +529,11 @@ class OpenRouterModel(BaseModel):
         if len(sequences) == 1:
             return sequences[0]
         prompt = build_prompt(board, color, dice, sequences)
+        # Log just what varies turn to turn: the dice and the compact
+        # board description. Full prompt (rules/layout/notation) is
+        # identical every turn and lives in the source.
+        print(f"[OPENROUTER] {color.value} to move, dice={dice[0]}-{dice[1]}")
+        print(_describe_board(board, color))
         for attempt in range(1, self._max_retries + 1):
             try:
                 reply = self._http(prompt)
