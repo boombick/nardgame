@@ -42,6 +42,26 @@ def _pip_count(board: Board, color: Color) -> int:
     return board.pip_count(color)
 
 
+def _stuck_in_opp_home(board: Board, color: Color) -> int:
+    """How many of `color`'s checkers are currently sitting in the
+    opponent's home zone (i.e. still in the long transit through enemy
+    territory).
+
+    These checkers have high pip cost and are the first thing a race-phase
+    policy should unload. Observed failure mode: the LLM kept building
+    "blocks" in the opponent's home instead of extracting the several
+    checkers it had parked there, burning ~20 pips apiece to haul them
+    back around. Surfacing this as a single integer in the prompt lets
+    the model prioritise extraction concretely."""
+    opp_home_range = range(13, 19) if color == Color.WHITE else range(1, 7)
+    total = 0
+    for pt in opp_home_range:
+        ps = board.points[pt]
+        if ps.color == color and ps.count > 0:
+            total += ps.count
+    return total
+
+
 def _opponent_before_home(board: Board, color: Color) -> int:
     """How many of the opponent's checkers still sit outside their own home.
 
@@ -151,6 +171,7 @@ def _describe_board(board: Board, color: Color) -> str:
     pip_b = _pip_count(board, Color.BLACK)
     phase = _phase(board, color)
     opp_before = _opponent_before_home(board, color)
+    my_stuck = _stuck_in_opp_home(board, color)
     # Derived guidance per phase — written out so the model has a single
     # canonical instruction for each regime instead of re-deriving it.
     phase_ru = {
@@ -174,6 +195,8 @@ def _describe_board(board: Board, color: Color) -> str:
         f"black={borne[Color.BLACK]}"
         f"\nШашек соперника ещё не в своём доме: {opp_before} {opp_color_ru} "
         f"из 15 (когда 0 — блокировать уже нечего, идёт гонка)."
+        f"\nТвоих шашек застряло в доме соперника (транзит, длинный путь "
+        f"до выхода): {my_stuck}."
         f"\nФаза: {phase_ru}."
     )
 
@@ -374,11 +397,20 @@ def build_prompt(board: Board, color: Color,
         "* Блок (настоящий) на пути бегущих шашек соперника ценнее, "
         "чем -1 pip на этом ходу. Ищи возможности построить или удержать "
         "заслон, особенно если отстаёшь по pip.",
-        "* Если в описании позиции фаза — «гонка», любые рассуждения про "
-        "блоки не имеют смысла: соперник уже дома или близко к нему, "
-        "блокировать нечего. Выбирай ход с максимальным Δpip.",
+        "* В фазе «гонка» правило жёсткое: выбирай кандидата с "
+        "максимальным Δpip. «Укрепить блок», «удержать заслон», «создать "
+        "мини-блок» в гонке = отказ от победы. Единственное исключение — "
+        "если у соперника осталась ровно одна шашка вне его дома и твой "
+        "ход ставит на её пути заслон из ≥2 шашек на соседних пунктах; "
+        "тогда заслонный ход допустим даже с меньшим Δpip.",
         "* Кандидаты помечены метрикой «(Δpip=−N)» — насколько ход снижает "
         "твой pip. В гонке и эндшпиле ориентируйся на это число.",
+        "* Строка «Твоих шашек застряло в доме соперника: N» — это твои "
+        "шашки, которые ещё в транзите. У них самый длинный путь до выхода "
+        "(18+ шагов) и они уязвимы для блока соперника. Если N>0 и ты в "
+        "гонке, каждый ход должен либо вытаскивать одну из них, либо "
+        "(если не получается) иметь максимальный Δpip среди альтернатив. "
+        "Парковать ещё одну шашку в доме соперника в гонке — запрещено.",
         "* Метка «мёртвая зона» у кандидата означает, что шашка заходит в "
         "дом соперника, где все соперниковы шашки уже собрались — такой "
         "ход не блокирует ничего и уводит шашку на длинный круг обратно. "

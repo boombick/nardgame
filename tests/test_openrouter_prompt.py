@@ -5,7 +5,8 @@ from engine.moves import Move
 from opponents.openrouter import (
     OpenRouterModel, _delta_pip, _describe_board, _describe_sequence,
     _is_dead_zone_move, _opponent_before_home, _phase, _pip_count,
-    build_prompt, extract_evaluation, extract_reason, parse_reply,
+    _stuck_in_opp_home, build_prompt, extract_evaluation, extract_reason,
+    parse_reply,
 )
 
 
@@ -212,6 +213,42 @@ class TestOpponentBeforeHome:
         b.points[1].color = Color.WHITE
         # From black's POV the opponent (white) is fully in pt1..6.
         assert _opponent_before_home(b, Color.BLACK) == 0
+
+
+class TestStuckInOppHome:
+    def test_start_position_zero_for_both(self):
+        # On the starting position nobody has transited into the other
+        # side's home yet.
+        b = Board()
+        assert _stuck_in_opp_home(b, Color.WHITE) == 0
+        assert _stuck_in_opp_home(b, Color.BLACK) == 0
+
+    def test_black_checker_in_white_home_is_stuck(self):
+        # Move a black checker into pt3 (inside white's home = black's
+        # transit). That's one stuck for black, zero for white.
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(3, Color.BLACK)
+        assert _stuck_in_opp_home(b, Color.BLACK) == 1
+        assert _stuck_in_opp_home(b, Color.WHITE) == 0
+
+    def test_white_checker_in_black_home_is_stuck(self):
+        # Symmetric: a white checker on pt15 (inside black's home = white
+        # transit) counts as stuck for white.
+        b = Board()
+        b.remove_one(24, Color.WHITE)
+        b.place_one(15, Color.WHITE)
+        assert _stuck_in_opp_home(b, Color.WHITE) == 1
+        assert _stuck_in_opp_home(b, Color.BLACK) == 0
+
+
+class TestPromptShowsStuckCounter:
+    def test_prompt_mentions_stuck_line(self):
+        # The literal prefix of the new line must appear in the prompt so
+        # the model can key off it in the body of its reasoning.
+        p = build_prompt(Board(), Color.WHITE, (3, 5),
+                         [[Move(24, 21, False)]])
+        assert "застряло в доме соперника" in p.lower()
 
 
 class TestDeltaPip:
