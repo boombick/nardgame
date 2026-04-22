@@ -2,7 +2,7 @@ import random
 import re
 from typing import Callable, List, Optional, Tuple
 
-from engine.board import Board, Color, point_to_step
+from engine.board import Board, Color, point_to_step, step_to_point
 from engine.moves import Move, apply_single
 from models.base import BaseModel
 from opponents.local_model import RandomLocalModel
@@ -60,6 +60,50 @@ def _stuck_in_opp_home(board: Board, color: Color) -> int:
         if ps.color == color and ps.count > 0:
             total += ps.count
     return total
+
+
+def _longest_opp_prime_ahead_of_stuck(board: Board, color: Color) -> int:
+    """Length of the longest consecutive run of opponent-held (≥2 checkers)
+    points on the escape path of `color`'s stuck-in-opp-home checkers.
+
+    Walks MY step-space starting one step ahead of the rearmost stuck
+    checker, scanning through the end of opponent's outer quadrant (step
+    17 = one before opponent's head-quadrant exit in this layout). A
+    run of 6 is a full prime that locks the stuck checkers until a 6-6
+    jumps over it; anything ≥4 is already a strong trap worth reacting to.
+
+    Returns 0 when there are no stuck checkers — in that case the metric
+    is meaningless and we don't want to mislead the model into chasing
+    phantom primes."""
+    my_stuck = _stuck_in_opp_home(board, color)
+    if my_stuck == 0:
+        return 0
+    opp = Color.BLACK if color == Color.WHITE else Color.WHITE
+    opp_home_range = range(13, 19) if color == Color.WHITE else range(1, 7)
+    rear_step: Optional[int] = None
+    for pt in opp_home_range:
+        ps = board.points[pt]
+        if ps.color == color and ps.count > 0:
+            s = point_to_step(pt, color)
+            if rear_step is None or s < rear_step:
+                rear_step = s
+    assert rear_step is not None  # my_stuck > 0 guarantees at least one
+    longest = 0
+    cur = 0
+    # Range 6..11 is opp's home in my step-space (transit); 12..17 is
+    # opp's outer quadrant where primes typically extend from the home.
+    # Past step 17 lies opp's own head/home-quadrant from my POV —
+    # irrelevant to my stuck's escape.
+    for step in range(rear_step + 1, 18):
+        pt = step_to_point(step, color)
+        ps = board.points[pt]
+        if ps.color == opp and ps.count >= 2:
+            cur += 1
+            if cur > longest:
+                longest = cur
+        else:
+            cur = 0
+    return longest
 
 
 def _opponent_before_home(board: Board, color: Color) -> int:
@@ -172,6 +216,7 @@ def _describe_board(board: Board, color: Color) -> str:
     phase = _phase(board, color)
     opp_before = _opponent_before_home(board, color)
     my_stuck = _stuck_in_opp_home(board, color)
+    opp_prime = _longest_opp_prime_ahead_of_stuck(board, color)
     # Derived guidance per phase — written out so the model has a single
     # canonical instruction for each regime instead of re-deriving it.
     phase_ru = {
@@ -179,7 +224,28 @@ def _describe_board(board: Board, color: Color) -> str:
         "race":    "гонка (сопернику уже нечем грозить — максимизируй Δpip)",
         "endgame": "эндшпиль (все свои в доме — равномерно заполняй без дыр)",
     }[phase]
+    # "Contact" with zero stuck is a soft race: any block you'd build in
+    # opp's home now catches no one of yours because none of yours has to
+    # cross it anymore. Flag it so the model stops chanting "мини-блок".
+    if phase == "contact" and my_stuck == 0:
+        phase_ru += (" — но твоих стуков 0: блоки в доме соперника ценности "
+                     "уже не имеют, твои шашки туда не вернутся")
     opp_color_ru = "белых" if color == Color.BLACK else "чёрных"
+    # Prime-ahead-of-stuck is only informative when stuck > 0. Render it
+    # with an actionable warning at ≥4; below that it's just context.
+    if my_stuck > 0:
+        if opp_prime >= 6:
+            prime_tail = (f": {opp_prime} — полный блок, выход только через "
+                          f"дубль 6-6; приоритет #1 вытащить стуки сейчас")
+        elif opp_prime >= 4:
+            prime_tail = (f": {opp_prime} — сильный заслон, пока ещё можно "
+                          f"проскочить; приоритет #1 вытащить стуки сейчас")
+        else:
+            prime_tail = f": {opp_prime}"
+        prime_line = ("\nСамый длинный заслон соперника (≥2 шашки подряд) "
+                      f"перед твоими застрявшими{prime_tail}.")
+    else:
+        prime_line = ""
     return (
         f"On-turn: {color.value.upper()}\n"
         f"Board:\n" + "\n".join(rows) +
@@ -196,7 +262,7 @@ def _describe_board(board: Board, color: Color) -> str:
         f"\nШашек соперника ещё не в своём доме: {opp_before} {opp_color_ru} "
         f"из 15 (когда 0 — блокировать уже нечего, идёт гонка)."
         f"\nТвоих шашек застряло в доме соперника (транзит, длинный путь "
-        f"до выхода): {my_stuck}."
+        f"до выхода): {my_stuck}." + prime_line +
         f"\nФаза: {phase_ru}."
     )
 
@@ -415,6 +481,31 @@ def build_prompt(board: Board, color: Color,
         "дом соперника, где все соперниковы шашки уже собрались — такой "
         "ход не блокирует ничего и уводит шашку на длинный круг обратно. "
         "Не выбирай такой ход, если есть альтернатива без этой метки.",
+        "* Строка «Самый длинный заслон соперника перед твоими "
+        "застрявшими: N» считает, сколько пунктов подряд в твоей "
+        "транзитной зоне соперник держит минимум двумя шашками. N=6 = "
+        "полный заслон (6-прайм): твои стуки в капкане, пока не выпадет "
+        "6-6. N=5 = почти капкан. При N≥4 и stuck>0 — игнорируй любые "
+        "«усиление дома» и «мини-блок», единственная разумная цель "
+        "хода — вытащить застрявшую шашку из дома соперника (лучше всего "
+        "компаундом, прыгая сразу за арьергард соперника).",
+        "* Соответственно, пока соперник ещё *строит* заслон (N=3..5), у "
+        "тебя короткое окно, чтобы вывести стуков до того, как появится "
+        "шестой пункт. Каждый «потерянный» на укрепление дома ход =  "
+        "подарок сопернику на закрытие капкана.",
+        "* Если у тебя stuck = 0, то даже в фазе «контакт» любые «блоки» "
+        "и «заслоны» внутри дома соперника — самообман: твои шашки туда "
+        "больше не вернутся, ловить там нечего. Осмысленный блок в этой "
+        "ситуации — только на пути шашек соперника к его дому, то есть "
+        "где-то в твоей транзитной зоне (pt13..18 для чёрных / pt1..6 для "
+        "белых) по его маршруту.",
+        "* Пока у тебя stuck > 0, не торопись снимать последнюю свою шашку "
+        "с пунктов сразу за домом соперника — pt24 (для чёрных) / pt12 "
+        "(для белых). Пока на этом пункте стоит твоя шашка, соперник "
+        "туда встать не может (правило «занятого пункта»), и твой стук "
+        "всегда имеет эту точку как безопасную посадку. Снимешь — "
+        "сопернику достаточно одной шашки, чтобы её перекрыть, и у твоих "
+        "стуков сразу схлопывается выход из его дома.",
         "* Не собирай весь дом рано: пока соперник ещё идёт через твою "
         "транзитную зону, держи 2-4 шашки снаружи дома как потенциальный "
         "заслон. Ранний сбор всех в дом = отказ от блокирования.",

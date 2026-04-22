@@ -4,9 +4,9 @@ from engine.board import Board, Color
 from engine.moves import Move
 from opponents.openrouter import (
     OpenRouterModel, _delta_pip, _describe_board, _describe_sequence,
-    _is_dead_zone_move, _opponent_before_home, _phase, _pip_count,
-    _stuck_in_opp_home, build_prompt, extract_evaluation, extract_reason,
-    parse_reply,
+    _is_dead_zone_move, _longest_opp_prime_ahead_of_stuck,
+    _opponent_before_home, _phase, _pip_count, _stuck_in_opp_home,
+    build_prompt, extract_evaluation, extract_reason, parse_reply,
 )
 
 
@@ -249,6 +249,206 @@ class TestPromptShowsStuckCounter:
         p = build_prompt(Board(), Color.WHITE, (3, 5),
                          [[Move(24, 21, False)]])
         assert "застряло в доме соперника" in p.lower()
+
+
+class TestOppPrimeAheadOfStuck:
+    def test_zero_when_no_stuck(self):
+        # Start position: nobody stuck, so the metric is 0 and doesn't
+        # mislead the model into reading phantom opponent primes.
+        assert _longest_opp_prime_ahead_of_stuck(Board(), Color.WHITE) == 0
+        assert _longest_opp_prime_ahead_of_stuck(Board(), Color.BLACK) == 0
+
+    def test_single_opp_point_with_count_one_is_ignored(self):
+        # A lone opp checker (count=1) is not a blocker for landing so
+        # it never counts toward the prime length. Set up black stuck on
+        # pt5 and a single white on pt3; also clear pt24 stack so it
+        # doesn't register as an independent 1-long run.
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(5, Color.BLACK)
+        # Clear pt24 stack directly — it's initial-position scaffolding
+        # that would otherwise register as an opp block of length 1.
+        b.points[24].count = 0
+        b.points[24].color = None
+        b.points[3].count = 1
+        b.points[3].color = Color.WHITE
+        assert _longest_opp_prime_ahead_of_stuck(b, Color.BLACK) == 0
+
+    def test_prime_of_two_counted(self):
+        # Black stuck on pt5 (step 7). Build a mini-prime at pt3..pt4 with
+        # 2 white each. Clear pt24 so only pt3 and pt4 register as ≥2
+        # white in the scan; longest should be 2.
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(5, Color.BLACK)
+        b.points[24].count = 0
+        b.points[24].color = None
+        b.points[3].count = 2
+        b.points[3].color = Color.WHITE
+        b.points[4].count = 2
+        b.points[4].color = Color.WHITE
+        assert _longest_opp_prime_ahead_of_stuck(b, Color.BLACK) == 2
+
+    def test_full_six_prime_trap(self):
+        # The user's scenario: opponent has 6 consecutive points held with
+        # ≥2 checkers each directly in front of black's stuck. Black stuck
+        # on pt6 (step 6), white with ≥2 on pt1..pt5 and pt24 — in black's
+        # step space those are steps 7, 8, 9, 10, 11, 12 consecutive.
+        # Expected: 6 (locked-in prime).
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(6, Color.BLACK)  # stuck on pt6
+        # Need 2 whites each on pt1, pt2, pt3, pt4, pt5. That's 10 whites.
+        # Start has 15 on pt24. Also keep some on pt24 (so there's a
+        # "white 2+" at step 12 in black's space extending the prime).
+        targets = [1, 2, 3, 4, 5]
+        for pt in targets:
+            for _ in range(2):
+                b.remove_one(24, Color.WHITE)
+                b.place_one(pt, Color.WHITE)
+        # pt24 still has 5 whites (2+), extending the run by one more step.
+        assert _longest_opp_prime_ahead_of_stuck(b, Color.BLACK) == 6
+
+    def test_gap_breaks_the_run(self):
+        # Black stuck on pt6. White ≥2 on pt5, pt4, pt2, pt1 (missing pt3
+        # = gap). Clear pt24 so it doesn't extend the pt1 run. Two runs
+        # of length 2 each (pt5-pt4 and pt2-pt1) — longest is 2, not 4.
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(6, Color.BLACK)
+        b.points[24].count = 0
+        b.points[24].color = None
+        for pt in (1, 2, 4, 5):
+            b.points[pt].count = 2
+            b.points[pt].color = Color.WHITE
+        assert _longest_opp_prime_ahead_of_stuck(b, Color.BLACK) == 2
+
+    def test_own_presence_breaks_the_run(self):
+        # Black stuck on pt6 (rearmost) AND another black on pt3 acting
+        # as an anchor. White ≥2 on pt1, pt2, pt4, pt5. Clear pt24 first.
+        # The pt3 with black breaks what would otherwise be a 5-run
+        # (pt1..pt5) into 2 and 2.
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(6, Color.BLACK)  # rearmost stuck
+        b.remove_one(12, Color.BLACK)
+        b.place_one(3, Color.BLACK)  # own anchor inside opp home
+        b.points[24].count = 0
+        b.points[24].color = None
+        for pt in (1, 2, 4, 5):
+            b.points[pt].count = 2
+            b.points[pt].color = Color.WHITE
+        assert _longest_opp_prime_ahead_of_stuck(b, Color.BLACK) == 2
+
+    def test_scans_from_rearmost_not_frontmost_stuck(self):
+        # Two stuck: one on pt6 (rearmost, step 6) and one on pt2
+        # (frontmost, step 10). A prime between them should count from
+        # pt6's perspective — so pt5/pt4 with ≥2 white counts as 2.
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(6, Color.BLACK)
+        b.remove_one(12, Color.BLACK)
+        b.place_one(2, Color.BLACK)
+        b.points[24].count = 0
+        b.points[24].color = None
+        for pt in (4, 5):
+            b.points[pt].count = 2
+            b.points[pt].color = Color.WHITE
+        assert _longest_opp_prime_ahead_of_stuck(b, Color.BLACK) == 2
+
+
+class TestPromptShowsPrimeThreat:
+    def test_prime_line_appears_when_stuck_and_prime_exist(self):
+        # Black stuck on pt6 with a 2-prime on pt4-pt5: prompt must surface
+        # the metric so the model can react. Clear pt24 to isolate.
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(6, Color.BLACK)
+        b.points[24].count = 0
+        b.points[24].color = None
+        for pt in (4, 5):
+            b.points[pt].count = 2
+            b.points[pt].color = Color.WHITE
+        p = build_prompt(b, Color.BLACK, (3, 5),
+                         [[Move(12, 9, False)]])
+        low = p.lower()
+        assert "самый длинный заслон соперника" in low
+        # With this layout the prime run is 2 and should appear as a number.
+        assert "перед твоими застрявшими: 2" in low
+
+    def test_prime_line_absent_when_no_stuck(self):
+        # Without stuck the metric is undefined/0 and should NOT be
+        # rendered in the describe-board block (the prompt rules section
+        # still mentions the metric as a rule, so we match the specific
+        # describe-line signature with the "(≥2 шашки подряд)" parenthetical).
+        p = build_prompt(Board(), Color.WHITE, (3, 5),
+                         [[Move(24, 21, False)]])
+        assert "(≥2 шашки подряд) перед твоими застрявшими" not in p.lower()
+
+    def test_prime_line_warns_at_six(self):
+        # 6-prime = full lockout; the warning text must say so explicitly.
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(6, Color.BLACK)
+        for pt in (1, 2, 3, 4, 5):
+            for _ in range(2):
+                b.remove_one(24, Color.WHITE)
+                b.place_one(pt, Color.WHITE)
+        # pt24 still ≥2 white — extends to 6.
+        p = build_prompt(b, Color.BLACK, (3, 5),
+                         [[Move(12, 9, False)]])
+        low = p.lower()
+        assert "перед твоими застрявшими: 6" in low
+        assert "полный блок" in low or "6-6" in low
+
+
+class TestPhaseAnnotationWhenStuckZero:
+    def test_contact_phase_gets_soft_race_note_when_my_stuck_is_zero(self):
+        # Start position: contact phase, stuck = 0. The phase line must
+        # carry a note that blocks inside opp's home no longer pay off.
+        p = build_prompt(Board(), Color.WHITE, (3, 5),
+                         [[Move(24, 21, False)]])
+        low = p.lower()
+        assert "фаза: контакт" in low
+        assert "но твоих стуков 0" in low
+
+    def test_contact_phase_no_note_when_stuck_exists(self):
+        # Black with one stuck on pt5: the "stuck = 0" soft-race note must
+        # NOT appear — blocks in opp home are still meaningful for
+        # opponent's own traffic.
+        b = Board()
+        b.remove_one(12, Color.BLACK)
+        b.place_one(5, Color.BLACK)
+        p = build_prompt(b, Color.BLACK, (3, 5),
+                         [[Move(12, 9, False)]])
+        low = p.lower()
+        assert "но твоих стуков 0" not in low
+
+
+class TestPromptPrimeAndAnchorRules:
+    def test_prompt_explains_prime_threshold_rule(self):
+        p = build_prompt(Board(), Color.WHITE, (3, 5),
+                         [[Move(24, 21, False)]])
+        low = p.lower()
+        # Explicit rule: at N≥4 with stuck>0, escape is priority #1.
+        assert "n≥4" in low or "n=6" in low
+        assert "вытащить застрявш" in low
+
+    def test_prompt_explains_stuck_zero_block_futility(self):
+        p = build_prompt(Board(), Color.WHITE, (3, 5),
+                         [[Move(24, 21, False)]])
+        low = p.lower()
+        # Rule about blocks inside opp home being futile when stuck=0.
+        assert "stuck = 0" in low or "stuck=0" in low
+        assert "самообман" in low or "ловить там нечего" in low
+
+    def test_prompt_explains_anchor_preservation(self):
+        p = build_prompt(Board(), Color.WHITE, (3, 5),
+                         [[Move(24, 21, False)]])
+        low = p.lower()
+        # Rule about not vacating pt24/pt12 while stuck > 0.
+        assert "pt24" in low and "pt12" in low
+        assert "якор" in low or "безопасн" in low
 
 
 class TestDeltaPip:
