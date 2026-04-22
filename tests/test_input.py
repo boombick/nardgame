@@ -64,3 +64,29 @@ class TestInputState:
         state.click_point(24, Board())
         state.click_point(7, Board())  # empty, not a valid target
         assert state.selected_from is None
+
+
+class TestReset:
+    def test_reset_clears_played_and_selection(self):
+        # After a partial click the state holds a move in played_so_far.
+        # reset() should put us back to "nothing chosen yet" for the same
+        # sequence list, so the user can reconsider.
+        seqs = generate_move_sequences(Board(), Color.WHITE, (3, 5),
+                                       is_first_roll=True)
+        state = InputState(color=Color.WHITE, sequences=seqs)
+        state.click_point(24, Board())
+        state.click_point(21, Board())
+        assert state.played_so_far
+        state.reset()
+        assert state.played_so_far == []
+        assert state.selected_from is None
+        # After reset the full set of legal starting points is back.
+        assert state.legal_from_points == {24}
+
+    def test_reset_on_empty_state_is_noop(self):
+        seqs = generate_move_sequences(Board(), Color.WHITE, (3, 5),
+                                       is_first_roll=True)
+        state = InputState(color=Color.WHITE, sequences=seqs)
+        state.reset()
+        assert state.played_so_far == []
+        assert state.selected_from is None

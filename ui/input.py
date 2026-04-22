@@ -70,6 +70,16 @@ class InputState:
                 pos = dst
         return out
 
+    def reset(self) -> None:
+        """Discard any partially-played moves and the current selection.
+
+        The user might half-commit a move and then want to reconsider —
+        the GameScreen exposes this via the "Отменить ход" button. The
+        InputState itself just forgets what it had; snapshot restore of
+        the display board is GameScreen's job."""
+        self.played_so_far = []
+        self.selected_from = None
+
     def click_point(self, point: int, board: Board) -> Optional[List[Move]]:
         """Handle a click on `point`. Returns the fully-chosen sequence when
         the last move has been resolved; otherwise None."""

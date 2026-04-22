@@ -158,6 +158,8 @@ class GameScreen:
         # the _START banner). The game-over buttons sit in the same central
         # band as the start button, side by side.
         self.roll_button = Button((1168, 280, 96, 40), "Roll", self._on_roll)
+        self.undo_button = Button((1148, 225, 116, 40), "Отменить",
+                                  self._on_undo)
         self.start_button = Button((580, 400, 120, 50), "Старт",
                                    self._on_start)
         self.again_button = Button((500, 460, 130, 50), "Новая игра",
@@ -168,6 +170,15 @@ class GameScreen:
         # Board used exclusively for rendering. Lags the real `game.board`
         # during move animations; they converge when all anims complete.
         self.display_board: Board = self.game.board.clone()
+
+        # Snapshot of display_board at the moment a human's turn begins.
+        # "Отменить" rolls display_board back to this snapshot and clears
+        # input_state.played_so_far — i.e. the whole partial turn is undone
+        # in one shot. We keep the full turn as a single atomic undo unit
+        # instead of step-by-step to keep the state-machine simple: a
+        # partial click already animates `display_board` forward, so a
+        # per-step undo would need inverse animations and per-move snapshots.
+        self._turn_snapshot: Optional[Board] = None
 
         # Dice state — one slot per player, persistent across turns so the
         # opponent's last roll stays visible while you're playing.
@@ -237,6 +248,29 @@ class GameScreen:
         print("[GAME] Return-to-menu requested")
         self.app.goto_menu()
 
+    def _can_undo(self) -> bool:
+        """Undo is offered while the human is mid-turn with at least one
+        move already committed against the display board. After a full
+        sequence is handed to `game.play` it's too late — the game state
+        has advanced and we no longer hold a single atomic snapshot."""
+        return (self.state == _HUMAN
+                and self.input_state is not None
+                and bool(self.input_state.played_so_far)
+                and self._turn_snapshot is not None)
+
+    def _on_undo(self):
+        if not self._can_undo():
+            return
+        current = self.game.current_player
+        played = _fmt_seq(self.input_state.played_so_far)
+        print(f"[{current.value}] Undo partial move: discard {played}")
+        # Snapshot is the board as it was when the turn began. Restoring
+        # it plus resetting the input state puts us exactly back to the
+        # "waiting for first click" state — no anim needed, since we're
+        # snapping to a known-rendered frame.
+        self.display_board = self._turn_snapshot.clone()
+        self.input_state.reset()
+
     def _maybe_begin_auto_roll(self):
         if self.state != _IDLE or self.game.is_over():
             return
@@ -278,6 +312,8 @@ class GameScreen:
                 self._commit_sequence(current, [])
                 return
             self.input_state = InputState(color=current, sequences=seqs)
+            # Snapshot before the human touches anything — basis for undo.
+            self._turn_snapshot = self.display_board.clone()
             self.state = _HUMAN
             print(f"[{current.value}] Waiting for click. "
                   f"Movable points: "
@@ -514,7 +550,23 @@ class GameScreen:
             return
         if not self.input_state:
             return
+        # Undo via keyboard: Esc or U. Mouse path goes through the button,
+        # which checks _can_undo itself.
+        if (event.type == pygame.KEYDOWN
+                and event.key in (pygame.K_ESCAPE, pygame.K_u)):
+            self._on_undo()
+            return
+        # Undo button is only active when there's something to undo; give
+        # it a chance before the hit_test falls through to board clicks.
+        if self._can_undo():
+            self.undo_button.handle(event)
         if event.type != pygame.MOUSEBUTTONDOWN:
+            return
+        # If the click landed on the undo button rect, _on_undo already ran
+        # and reset the input state; don't also pass the same click down to
+        # the board hit-tester.
+        if (self._can_undo()
+                and self.undo_button.rect.collidepoint(event.pos)):
             return
         pt = hit_test(event.pos, self.layout)
         if pt is None:
@@ -566,6 +618,11 @@ class GameScreen:
         # their own action buttons so leaving Roll around would clutter.
         if self.state not in (_START, _OVER):
             self.roll_button.draw(screen, self.font)
+        # Undo button appears only while the human has a partial move on
+        # the table. Drawing it unconditionally would confuse — during bot
+        # turns or rolls there's nothing to undo.
+        if self._can_undo():
+            self.undo_button.draw(screen, self.font)
         # "Ход: …" is meaningful only while the game is running. After the
         # last bear-off `game.current_player` points at the *next* side,
         # which would confusingly still say "Ход: чёрные" on the winning
