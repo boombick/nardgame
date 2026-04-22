@@ -20,7 +20,11 @@ def hit_test(pos: Tuple[int, int], layout: BoardLayout) -> Optional[int]:
 class InputState:
     """Click-driven state machine that filters the legal-sequence list down
     to one concrete sequence. The caller feeds click_point() each click; when
-    a full sequence is resolved, click_point() returns it."""
+    a full sequence is resolved, click_point() returns it.
+
+    Clicking a chained destination (e.g. `src - d1 - d2` reachable by the same
+    checker) applies the whole chain at once so the user can pick any
+    reachable end point, not only the immediate next stop."""
 
     color: Color
     sequences: List[List[Move]]
@@ -28,7 +32,6 @@ class InputState:
     played_so_far: List[Move] = field(default_factory=list)
 
     def _remaining_prefixes(self) -> List[List[Move]]:
-        """Sequences whose first `len(played_so_far)` moves equal played_so_far."""
         out = []
         n = len(self.played_so_far)
         for s in self.sequences:
@@ -41,33 +44,69 @@ class InputState:
         return [s[n] for s in self._remaining_prefixes() if len(s) > n]
 
     @property
+    def legal_from_points(self) -> Set[int]:
+        """Points whose checkers can legally start the next move."""
+        return {m.from_point for m in self._next_moves()}
+
+    @property
     def highlight_targets(self) -> Set[int]:
-        """Set of destination points (0 for bear-off) reachable from the
-        currently selected from-point."""
+        """Every destination reachable from `selected_from` by chaining
+        consecutive moves of the same checker within some remaining legal
+        sequence. Includes both single-die destinations and multi-die
+        compound destinations. Bear-off is reported as 0."""
         if self.selected_from is None:
             return set()
         out: Set[int] = set()
-        for m in self._next_moves():
-            if m.from_point == self.selected_from:
-                out.add(0 if m.is_bear_off else m.to_point)
+        n = len(self.played_so_far)
+        for seq in self._remaining_prefixes():
+            pos = self.selected_from
+            for m in seq[n:]:
+                if m.from_point != pos:
+                    break
+                dst = 0 if m.is_bear_off else m.to_point
+                out.add(dst)
+                if m.is_bear_off:
+                    break
+                pos = dst
         return out
 
     def click_point(self, point: int, board: Board) -> Optional[List[Move]]:
         """Handle a click on `point`. Returns the fully-chosen sequence when
-        the last move in it has been resolved; otherwise None."""
+        the last move has been resolved; otherwise None."""
         if self.selected_from is None:
-            candidates = {m.from_point for m in self._next_moves()}
-            if point in candidates:
+            if point in self.legal_from_points:
                 self.selected_from = point
             return None
-        if point in self.highlight_targets:
-            for m in self._next_moves():
-                to = 0 if m.is_bear_off else m.to_point
-                if m.from_point == self.selected_from and to == point:
-                    self.played_so_far.append(m)
-                    self.selected_from = None
-                    if not self._next_moves():
-                        return list(self.played_so_far)
-                    return None
+        chain = self._find_chain(point)
+        if chain:
+            self.played_so_far.extend(chain)
+            self.selected_from = None
+            if not self._next_moves():
+                return list(self.played_so_far)
+            return None
+        # Click missed — clear selection so user can retry.
         self.selected_from = None
         return None
+
+    def _find_chain(self, target: int) -> Optional[List[Move]]:
+        """Find the shortest chain of moves starting from `selected_from`
+        that reaches `target`, where the chain is a prefix of some remaining
+        legal sequence."""
+        n = len(self.played_so_far)
+        best: Optional[List[Move]] = None
+        for seq in self._remaining_prefixes():
+            pos = self.selected_from
+            chain: List[Move] = []
+            for m in seq[n:]:
+                if m.from_point != pos:
+                    break
+                chain.append(m)
+                dst = 0 if m.is_bear_off else m.to_point
+                if dst == target:
+                    if best is None or len(chain) < len(best):
+                        best = list(chain)
+                    break
+                if m.is_bear_off:
+                    break
+                pos = dst
+        return best

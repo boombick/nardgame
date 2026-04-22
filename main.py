@@ -13,7 +13,11 @@ class App:
 
     def make_openrouter(self):
         key = os.environ.get("OPENROUTER_API_KEY", "")
-        return OpenRouterModel(api_key=key)
+        model = os.environ.get("OPENROUTER_MODEL")  # override default if set
+        kwargs = {"api_key": key}
+        if model:
+            kwargs["model"] = model
+        return OpenRouterModel(**kwargs)
 
     def start_game(self, white, black):
         self.active = GameScreen(self, white, black)
@@ -45,17 +49,19 @@ def run():
         return app
     pygame.init()
     app = App()
-    app.screen = pygame.display.set_mode((1280, 720))
+    app.screen = pygame.display.set_mode((1280, 800))
     pygame.display.set_caption("Long Backgammon")
     app.active = MenuScreen(app)
     clock = pygame.time.Clock()
     running = True
     while running:
+        now = pygame.time.get_ticks()
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             else:
                 app.active.handle(event)
+        app.active.tick(now)
         app.active.draw(app.screen)
         pygame.display.flip()
         clock.tick(30)

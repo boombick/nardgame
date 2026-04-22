@@ -17,7 +17,7 @@ class BoardLayout:
     module stays unit-testable."""
 
     screen_w: int = 1280
-    screen_h: int = 720
+    screen_h: int = 800
     board_width: int = 1024
     board_height: int = 640
     bar_width: int = 32

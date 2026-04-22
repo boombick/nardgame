@@ -30,9 +30,32 @@ class TestInputState:
                                        is_first_roll=True)
         state = InputState(color=Color.WHITE, sequences=seqs)
         state.click_point(24, Board())
+        # Chained destinations (compound moves with both dice) may apply more
+        # than one move at once; check at least one was played.
         target = next(iter(state.highlight_targets))
         state.click_point(target, Board())
-        assert len(state.played_so_far) == 1
+        assert len(state.played_so_far) >= 1
+
+    def test_compound_target_highlighted(self):
+        # Dice (3,5): from head (pt 24), one checker plays both dice -> 24-8=16.
+        # Expect intermediate (21 or 19) AND compound destination 16 to show.
+        seqs = generate_move_sequences(Board(), Color.WHITE, (3, 5),
+                                       is_first_roll=True)
+        state = InputState(color=Color.WHITE, sequences=seqs)
+        state.click_point(24, Board())
+        assert 16 in state.highlight_targets
+        assert 21 in state.highlight_targets or 19 in state.highlight_targets
+
+    def test_click_compound_target_applies_chain(self):
+        seqs = generate_move_sequences(Board(), Color.WHITE, (3, 5),
+                                       is_first_roll=True)
+        state = InputState(color=Color.WHITE, sequences=seqs)
+        state.click_point(24, Board())
+        state.click_point(16, Board())
+        # Full sequence resolved by a single compound click.
+        assert len(state.played_so_far) == 2
+        assert state.played_so_far[0].from_point == 24
+        assert state.played_so_far[-1].to_point == 16
 
     def test_click_non_own_clears_selection(self):
         seqs = generate_move_sequences(Board(), Color.WHITE, (3, 5),

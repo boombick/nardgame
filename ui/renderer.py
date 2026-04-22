@@ -12,6 +12,8 @@ WHITE_CHECKER = (240, 240, 240)
 BLACK_CHECKER = (30, 30, 30)
 TEXT = (20, 20, 20)
 HIGHLIGHT = (255, 215, 0)
+TARGET_DOT = (50, 200, 80)
+TARGET_DOT_EDGE = (20, 100, 40)
 
 
 class Renderer:
@@ -75,8 +77,18 @@ class Renderer:
                                  (rect.x, rect.y, rect.w, rect.h), 3)
         for tpt in highlight_targets:
             rect = L.point_rect(tpt)
-            pygame.draw.rect(self.screen, HIGHLIGHT,
-                             (rect.x, rect.y, rect.w, rect.h), 3)
+            top_row = tpt >= 13
+            cx = rect.x + rect.w // 2
+            # The point number is drawn outside the triangle in _draw_board:
+            # above the rect for top-row points, below for bottom-row. Wrap
+            # a green ring around it so highlights sit in clear space and
+            # the number remains readable.
+            label_h = self.font.get_height()
+            if top_row:
+                cy = rect.y - 16 + label_h // 2
+            else:
+                cy = rect.y + rect.h + 2 + label_h // 2
+            pygame.draw.circle(self.screen, TARGET_DOT, (cx, cy), 14, 3)
 
     def _draw_dice(self, dice) -> None:
         L = self.layout
