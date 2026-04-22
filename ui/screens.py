@@ -15,7 +15,10 @@ from notation.writer import save_game
 from models.base import BaseModel
 from opponents.local_model import RandomLocalModel
 from ui.input import InputState, hit_test
-from ui.layout import BoardLayout, checker_positions
+from ui.layout import (
+    BoardLayout, DICE_SIZE, checker_positions, dice_slot_count,
+    dice_slot_offsets, dice_slot_values,
+)
 from ui.renderer import (
     BLACK_CHECKER, Renderer, TARGET_DOT, TEXT, WHITE_CHECKER,
 )
@@ -721,6 +724,19 @@ class GameScreen:
         pygame.draw.circle(screen, fill, (x, y), r)
         pygame.draw.circle(screen, border, (x, y), r, 2)
 
+    def _used_slots_for(self, color: Color) -> int:
+        """How many dice slots have already been spent this turn by `color`.
+
+        Each move consumes one slot (doubles get four slots total, others
+        two). While a human is mid-turn we read `input_state.played_so_far`
+        so the dice panel dims slots click-by-click. Bots apply the whole
+        sequence atomically, so between rolls this is always 0 or full."""
+        if color != self.game.current_player:
+            return 0
+        if self.input_state is not None:
+            return len(self.input_state.played_so_far)
+        return 0
+
     def _draw_dice(self, screen):
         """Draw each player's last roll next to their head. Black's head is
         pt 12 (bottom-left of the board), so black's dice live in the left
@@ -728,12 +744,16 @@ class GameScreen:
         keep white's dice on the right margin near the bottom to line them
         up horizontally — side + colour make the owner obvious. The side
         belonging to whoever's NOT on turn is dimmed so players never
-        confuse the opponent's previous roll with their own current dice."""
+        confuse the opponent's previous roll with their own current dice.
+
+        For doubles we lay four slots out in a 2×2 grid; already-played
+        slots get a darker overlay and a diagonal strike-through so the
+        player can see at a glance which dice still have moves in them."""
         L = self.layout
-        # Dice are 64px squares; stack the second die 80px below the first.
-        # Black: left margin (x=0..board_left), anchor at x=32 so the square
-        # sits centred in the 128px-wide margin. White: right margin.
-        base_x_for = {Color.BLACK: 32,
+        # Slot geometry: keep 64px squares; for doubles we now need two
+        # columns, so pull black's anchor further left to keep the grid in
+        # the 128px-wide margin.
+        base_x_for = {Color.BLACK: 16,
                       Color.WHITE: L.board_left + L.board_width + 16}
         base_y = L.board_top + L.board_height - 160
         current = self.game.current_player
@@ -752,27 +772,60 @@ class GameScreen:
                 bg_active = (60, 60, 60)
                 bg_dim = (110, 110, 110)
                 bg_rolling = (120, 90, 50)
+                bg_used = (35, 35, 35)
                 text_color = (240, 240, 240)
+                text_used = (120, 120, 120)
+                strike = (200, 80, 80)
             else:
                 bg_active = (250, 250, 250)
                 bg_dim = (210, 205, 190)
                 bg_rolling = (255, 240, 200)
+                bg_used = (170, 170, 160)
                 text_color = (20, 20, 20)
+                text_used = (140, 140, 140)
+                strike = (200, 80, 80)
             if rolling:
                 bg = bg_rolling
             elif on_turn:
                 bg = bg_active
             else:
                 bg = bg_dim
-            for i, d in enumerate(dice):
-                ox, oy = self._dice_offsets[color][i]
-                x = base_x + ox
-                y = base_y + i * 80 + oy
-                pygame.draw.rect(screen, bg, (x, y, 64, 64))
-                pygame.draw.rect(screen, (0, 0, 0), (x, y, 64, 64), 2)
-                lbl = self.dice_font.render(str(d), True, text_color)
+            # During a spin the engine hasn't published the real dice yet,
+            # so we render whatever pair the flash RNG picked — always 2
+            # slots, never 4, even if the spin lands on a double.
+            if rolling:
+                slot_values = list(dice)
+                slot_offsets = [(0, 0), (0, 80)]
+                used = 0
+            else:
+                slot_values = dice_slot_values(dice)
+                slot_offsets = dice_slot_offsets(dice)
+                used = self._used_slots_for(color)
+            for i, d in enumerate(slot_values):
+                ox, oy = slot_offsets[i]
+                # Per-die jitter only applies while rolling and only to the
+                # two live slots; the extra (3rd/4th) slots don't exist
+                # during a spin so indexing stays safe.
+                if rolling and i < len(self._dice_offsets[color]):
+                    jx, jy = self._dice_offsets[color][i]
+                else:
+                    jx, jy = 0, 0
+                x = base_x + ox + jx
+                y = base_y + oy + jy
+                is_used = i < used
+                fill = bg_used if is_used else bg
+                text = text_used if is_used else text_color
+                pygame.draw.rect(screen, fill, (x, y, DICE_SIZE, DICE_SIZE))
+                pygame.draw.rect(screen, (0, 0, 0),
+                                 (x, y, DICE_SIZE, DICE_SIZE), 2)
+                lbl = self.dice_font.render(str(d), True, text)
                 screen.blit(lbl, (x + 32 - lbl.get_width() // 2,
                                   y + 32 - lbl.get_height() // 2))
+                if is_used:
+                    # Diagonal strike so "used" is readable without having
+                    # to compare greyscale shades side-by-side.
+                    pygame.draw.line(screen, strike, (x + 6, y + 6),
+                                     (x + DICE_SIZE - 6, y + DICE_SIZE - 6), 3)
 
 
 class ReplayScreen:

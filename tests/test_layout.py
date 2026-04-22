@@ -1,4 +1,7 @@
-from ui.layout import BoardLayout, checker_positions
+from ui.layout import (
+    BoardLayout, checker_positions, dice_slot_count, dice_slot_offsets,
+    dice_slot_values,
+)
 
 
 class TestBoardLayout:
@@ -49,3 +52,41 @@ class TestCheckerPositions:
         L = BoardLayout()
         positions = checker_positions(point=24, count=15, layout=L, top_row=True)
         assert len(positions) == 15
+
+
+class TestDiceSlotCount:
+    def test_non_double_has_two_slots(self):
+        assert dice_slot_count((2, 5)) == 2
+
+    def test_double_has_four_slots(self):
+        assert dice_slot_count((3, 3)) == 4
+        assert dice_slot_count((6, 6)) == 4
+
+
+class TestDiceSlotOffsets:
+    def test_non_double_is_vertical_stack(self):
+        # Two slots stacked vertically: same x, increasing y.
+        offs = dice_slot_offsets((2, 5))
+        assert len(offs) == 2
+        assert offs[0][0] == offs[1][0]
+        assert offs[1][1] > offs[0][1]
+
+    def test_double_is_2x2_grid(self):
+        # 4 slots: two columns, two rows. So we get exactly two distinct
+        # x-values and two distinct y-values.
+        offs = dice_slot_offsets((4, 4))
+        assert len(offs) == 4
+        xs = {x for x, _ in offs}
+        ys = {y for _, y in offs}
+        assert len(xs) == 2
+        assert len(ys) == 2
+
+
+class TestDiceSlotValues:
+    def test_non_double_shows_both_values(self):
+        # Non-double: slot 0 shows dice[0], slot 1 shows dice[1].
+        assert dice_slot_values((3, 5)) == [3, 5]
+
+    def test_double_repeats_value_four_times(self):
+        # Double: all four slots show the same value.
+        assert dice_slot_values((4, 4)) == [4, 4, 4, 4]

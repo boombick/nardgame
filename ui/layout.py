@@ -67,6 +67,43 @@ class BoardLayout:
         return Rect(x=x, y=y, w=self.point_width, h=self.row_height)
 
 
+# Dice slot geometry. Pure math so we can unit-test it without pygame.
+# Slot size and spacing match the render in GameScreen._draw_dice — if one
+# changes, the other must follow.
+DICE_SIZE = 64
+DICE_SPACING = 80     # vertical distance between stacked slots (non-double)
+DICE_COL_SPACING = 80  # horizontal distance between columns (double grid)
+
+
+def dice_slot_count(dice: Tuple[int, int]) -> int:
+    """Doubles are played 4 times; everything else 2 times."""
+    return 4 if dice[0] == dice[1] else 2
+
+
+def dice_slot_offsets(dice: Tuple[int, int]) -> List[Tuple[int, int]]:
+    """(dx, dy) offsets of each slot relative to the dice-group anchor.
+
+    Non-double: two slots stacked vertically at the same x.
+    Double: 2×2 grid (two columns × two rows). Visit order is row-major
+    (top-left, top-right, bottom-left, bottom-right) — the same order we
+    dim slots as moves are played, so the user's eye tracks "which die has
+    been spent" left-to-right, top-to-bottom."""
+    if dice[0] != dice[1]:
+        return [(0, 0), (0, DICE_SPACING)]
+    return [(0, 0),
+            (DICE_COL_SPACING, 0),
+            (0, DICE_SPACING),
+            (DICE_COL_SPACING, DICE_SPACING)]
+
+
+def dice_slot_values(dice: Tuple[int, int]) -> List[int]:
+    """Face value shown in each slot, in the same order as
+    `dice_slot_offsets`. Doubles repeat the value four times."""
+    if dice[0] != dice[1]:
+        return [dice[0], dice[1]]
+    return [dice[0]] * 4
+
+
 def checker_positions(point: int, count: int, layout: BoardLayout,
                       top_row: bool) -> List[Tuple[int, int]]:
     """Return a list of (cx, cy) centers for `count` stacked checkers at
