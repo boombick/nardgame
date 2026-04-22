@@ -73,6 +73,17 @@ class Board:
         ps = self.points[point]
         return ps.count if ps.color == color else 0
 
+    def pip_count(self, color: Color) -> int:
+        """Sum of pips-to-off across all of color's checkers currently on
+        the board. Lower is better — starting position has every side at
+        15 checkers × 24 pips = 360. Borne-off checkers contribute 0."""
+        total = 0
+        for pt in range(1, 25):
+            ps = self.points[pt]
+            if ps.color == color and ps.count > 0:
+                total += (24 - point_to_step(pt, color)) * ps.count
+        return total
+
     # Mutators -----------------------------------------------------------
 
     def remove_one(self, point: int, color: Color) -> None:

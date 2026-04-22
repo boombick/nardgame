@@ -149,3 +149,27 @@ class TestMutators:
         # Point 24 already has WHITE checkers; placing BLACK there must fail
         with pytest.raises(AssertionError):
             b.place_one(24, Color.BLACK)
+
+
+class TestPipCount:
+    def test_initial_pip_count_is_360_per_side(self):
+        # Starting position: 15 checkers at step 0 × 24 pips each = 360.
+        b = Board()
+        assert b.pip_count(Color.WHITE) == 360
+        assert b.pip_count(Color.BLACK) == 360
+
+    def test_moving_white_checker_reduces_pip(self):
+        # Moving pt24 → pt21 is a 3-pip step for white.
+        b = Board()
+        b.remove_one(24, Color.WHITE)
+        b.place_one(21, Color.WHITE)
+        assert b.pip_count(Color.WHITE) == 360 - 3
+
+    def test_borne_off_checker_has_zero_pip(self):
+        # Bearing off a checker removes it from the board and the pip sum.
+        b = Board()
+        b.remove_one(24, Color.WHITE)
+        b.place_one(1, Color.WHITE)   # step 23 = 1 pip from off
+        before = b.pip_count(Color.WHITE)
+        b.bear_off_one(1, Color.WHITE)
+        assert b.pip_count(Color.WHITE) == before - 1

@@ -136,6 +136,10 @@ class GameScreen:
         self.font = pygame.font.SysFont("sans", 18)
         self.dice_font = pygame.font.SysFont("sans", 36, bold=True)
         self.banner_font = pygame.font.SysFont("sans", 48, bold=True)
+        # Dedicated size for the top info strip — big enough to read pip
+        # counts from across the room, small enough to fit "Белые" + pip
+        # + off on a single line in each half of the window.
+        self.top_bar_font = pygame.font.SysFont("sans", 30, bold=True)
         self.game = Game(
             white_name="Human" if white_model is None
             else white_model.__class__.__name__,
@@ -614,6 +618,7 @@ class GameScreen:
             self._draw_moving(screen)
         else:
             self._draw_static(screen)
+        self._draw_top_bar(screen)
         # Roll button is hidden on the start and end banners — both have
         # their own action buttons so leaving Roll around would clutter.
         if self.state not in (_START, _OVER):
@@ -658,6 +663,37 @@ class GameScreen:
         if cur:
             lines.append(cur)
         return lines
+
+    def _draw_top_bar(self, screen):
+        """Render pip counts and borne-off counters for both sides in the
+        otherwise empty top strip above the board.
+
+        The human has no easy way to tell pip progress at a glance; without
+        this strip they'd have to count checkers and multiply by step
+        distances. Each side gets its own half-panel anchored to the side
+        of the board the player visually associates with their colour
+        (black on the left, white on the right). The side whose turn it
+        isn't is dimmed so the active player's numbers stand out."""
+        L = self.layout
+        current = self.game.current_player
+        pip_w = self.display_board.pip_count(Color.WHITE)
+        pip_b = self.display_board.pip_count(Color.BLACK)
+        off_w = self.display_board.borne_off[Color.WHITE]
+        off_b = self.display_board.borne_off[Color.BLACK]
+        # Centered vertically within the top margin.
+        font_h = self.top_bar_font.get_linesize()
+        y = max(8, (L.board_top - font_h) // 2)
+        # Dim the side not on turn so the eye snaps to the one that matters.
+        bright = (30, 25, 20)
+        dim = (140, 135, 125)
+        color_b = bright if current == Color.BLACK else dim
+        color_w = bright if current == Color.WHITE else dim
+        text_b = f"Чёрные   pip {pip_b}   off {off_b}/15"
+        text_w = f"Белые   pip {pip_w}   off {off_w}/15"
+        surf_b = self.top_bar_font.render(text_b, True, color_b)
+        surf_w = self.top_bar_font.render(text_w, True, color_w)
+        screen.blit(surf_b, (40, y))
+        screen.blit(surf_w, (L.screen_w - 40 - surf_w.get_width(), y))
 
     def _draw_bot_msg(self, screen):
         # A clearly-bordered panel below the board so the bot's latest move

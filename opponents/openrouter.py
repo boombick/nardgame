@@ -36,19 +36,10 @@ def _classify_point(pt: int, owner: Color) -> str:
 
 
 def _pip_count(board: Board, color: Color) -> int:
-    """Sum of pips-to-off across all of `color`'s checkers on the board.
-
-    Lower is better. At the starting position each side has 15 checkers at
-    step 0 (head), each 24 pips from bearing off — so total = 360. This is
-    a standard backgammon metric and gives the model an objective number to
-    compare sides instead of guessing from the raw point counts."""
-    total = 0
-    for pt in range(1, 25):
-        ps = board.points[pt]
-        if ps.color == color and ps.count > 0:
-            step = point_to_step(pt, color)   # 0 = head, 23 = deepest home
-            total += (24 - step) * ps.count
-    return total
+    """Thin wrapper around Board.pip_count kept for the module's internal
+    callers and the existing prompt tests. Lower is better. At the starting
+    position each side has 15 checkers × 24 pips = 360."""
+    return board.pip_count(color)
 
 
 def _opponent_before_home(board: Board, color: Color) -> int:
